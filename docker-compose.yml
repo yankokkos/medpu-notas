@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: medup-backend
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      - DB_HOST=${DB_HOST}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_NAME=${DB_NAME}
+      - DB_PORT=${DB_PORT}
+      - JWT_SECRET=${JWT_SECRET}
+      - JWT_EXPIRES_IN=${JWT_EXPIRES_IN}
+      - PORT=3001
+      - NODE_ENV=production
+      - FRONTEND_URL=${FRONTEND_URL}
+      - NFEIO_API_KEY=${NFEIO_API_KEY}
+      - NFEIO_API_URL=${NFEIO_API_URL}
+      - NFEIO_WEBHOOK_SECRET=${NFEIO_WEBHOOK_SECRET}
+    volumes:
+      - ./backend/uploads:/app/uploads
+    networks:
+      - medup-network
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: medup-frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    networks:
+      - medup-network
+
+networks:
+  medup-network:
+    driver: bridge
+

@@ -1,0 +1,14 @@
+node_modules
+npm-debug.log
+.env
+config.env
+*.md
+*.sql
+!database/migrations/*.sql
+scripts/
+.cursor/
+uploads/
+*.log
+.git
+.gitignore
+

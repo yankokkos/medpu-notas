@@ -1,0 +1,24 @@
+# Configuração para Coolify - Backend
+# Use este arquivo como referência ao configurar no Coolify
+
+# Build Settings:
+# Build Command: npm ci --only=production
+# Start Command: node src/server.js
+# Dockerfile: backend/Dockerfile
+# Port: 3001
+
+# Environment Variables (configurar no Coolify):
+# DB_HOST=seu_host_mysql
+# DB_USER=seu_usuario_mysql
+# DB_PASSWORD=sua_senha_mysql
+# DB_NAME=medup
+# DB_PORT=3306
+# JWT_SECRET=chave_secreta_jwt_forte
+# JWT_EXPIRES_IN=24h
+# PORT=3001
+# NODE_ENV=production
+# FRONTEND_URL=https://seu-frontend.com
+# NFEIO_API_KEY=sua_chave_nfeio
+# NFEIO_API_URL=https://api.nfe.io
+# NFEIO_WEBHOOK_SECRET=seu_webhook_secret
+

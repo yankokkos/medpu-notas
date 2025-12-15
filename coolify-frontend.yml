@@ -1,0 +1,12 @@
+# Configuração para Coolify - Frontend
+# Use este arquivo como referência ao configurar no Coolify
+
+# Build Settings:
+# Build Command: npm ci && npm run build
+# Start Command: nginx -g daemon off;
+# Dockerfile: Dockerfile (raiz)
+# Port: 80
+
+# Environment Variables (configurar no Coolify):
+# VITE_API_URL=https://seu-backend.com/api
+
