@@ -6,14 +6,16 @@ WORKDIR /app
 # Copiar arquivos de dependências
 COPY package*.json ./
 
-# Instalar dependências
-RUN npm ci
+# Instalar TODAS as dependências (incluindo devDependencies)
+# Forçar instalação de devDependencies mesmo com NODE_ENV=production
+RUN npm ci --include=dev || npm install
 
 # Copiar código fonte
 COPY . .
 
-# Build da aplicação
-RUN npm run build
+# Build da aplicação (vite precisa estar instalado)
+# Garantir que NODE_ENV não seja production durante o build
+RUN NODE_ENV=development npm run build
 
 # Production stage
 FROM nginx:alpine
