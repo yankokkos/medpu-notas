@@ -112,10 +112,12 @@ const startServer = async () => {
       process.exit(1);
     }
 
-    app.listen(PORT, () => {
+    app.listen(PORT, '0.0.0.0', () => {
       console.log(`🚀 Servidor rodando na porta ${PORT}`);
-      console.log(`📊 Health check: http://localhost:${PORT}/health`);
-      console.log(`🔗 API Base URL: http://localhost:${PORT}/api`);
+      console.log(`📊 Health check: http://0.0.0.0:${PORT}/health`);
+      console.log(`🔗 API Base URL: http://0.0.0.0:${PORT}/api`);
+      console.log(`🌍 Ambiente: ${process.env.NODE_ENV || 'development'}`);
+      console.log(`💾 Banco: ${process.env.DB_HOST || 'não configurado'}:${process.env.DB_PORT || 3306}/${process.env.DB_NAME || 'não configurado'}`);
     });
   } catch (error) {
     console.error('❌ Erro ao iniciar servidor:', error);

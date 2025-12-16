@@ -35,6 +35,10 @@ Thumbs.db
 # Documentation (não necessário para produção)
 *.md
 !README.md
+!DEPLOY.md
+!TROUBLESHOOTING.md
+!QUICK-FIX-502.md
+!CHECKLIST-DEPLOY.md
 Documentação*.md
 Documentação*.html
 CALCULO_IMPOSTOS*.md
