@@ -16,22 +16,13 @@ const pool = mysql.createPool({
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,
-  acquireTimeout: 60000,
-  timeout: 60000,
-  reconnect: true,
+  // Configurações válidas para mysql2
   charset: 'utf8mb4',
   // Configurações para evitar ECONNRESET
   keepAliveInitialDelay: 0,
   enableKeepAlive: true,
-  // Configurações de timeout mais robustas
-  connectTimeout: 60000,
-  acquireTimeout: 60000,
-  timeout: 60000,
-  // Configurações de reconexão
-  reconnect: true,
-  reconnectDelay: 2000,
-  reconnectDelayMax: 10000,
-  maxReconnects: 10
+  // Configurações de timeout
+  connectTimeout: 60000
 });
 
 // Handlers de eventos do pool para detectar e tratar problemas de conexão
