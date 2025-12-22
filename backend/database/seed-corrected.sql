@@ -31,13 +31,13 @@ SET @conta_clinica_id = (SELECT id FROM contas WHERE nome_conta = 'Clínica Dr. 
 SET @conta_tech_id = (SELECT id FROM contas WHERE nome_conta = 'Tech Solutions LTDA' LIMIT 1);
 SET @conta_consultoria_id = (SELECT id FROM contas WHERE nome_conta = 'Consultoria Médica XYZ' LIMIT 1);
 
-INSERT IGNORE INTO `empresas` (`conta_id`, `cnpj`, `razao_social`, `nome_fantasia`, `inscricao_municipal`, `inscricao_estadual`, `regime_tributario`, `endereco`, `cidade`, `uf`, `cep`, `telefone`, `email`, `codigo_servico_municipal`, `codigo_servico_federal`, `cnae_code`, `aliquota_iss`, `numero_rps`, `serie_rps`, `nfeio_sync_status`, `status`) VALUES
+INSERT IGNORE INTO `empresas` (`conta_id`, `cnpj`, `razao_social`, `nome_fantasia`, `inscricao_municipal`, `inscricao_estadual`, `regime_tributario`, `endereco`, `cidade`, `uf`, `cep`, `telefone`, `email`, `codigo_servico_municipal`, `codigo_servico_federal`, `cnae_code`, `aliquota_iss`, `numero_rps`, `serie_rps`, `nfeio_sync_status`, `configuracoes_fiscais`, `status`) VALUES
 -- Empresas clientes (conectadas a contas)
-(@conta_clinica_id, '12.345.678/0001-90', 'Clínica Dr. Santos LTDA', 'Clínica Santos', '12345', '123.456.789.012', 'Simples Nacional', 'Rua das Flores, 123, Centro', 'São Paulo', 'SP', '01234-567', '(11) 1234-5678', 'contato@clinicasantos.com.br', '1401', '14.01', '8619-0/00', 5.00, 1, '1', 'sincronizada', 'ativa'),
-(@conta_tech_id, '11.222.333/0001-44', 'Tech Solutions LTDA', 'TechSol', '11111', '111.222.333.444', 'Lucro Real', 'Av. Tecnologia, 789, Vila Tech', 'São Paulo', 'SP', '01234-567', '(11) 1111-2222', 'contato@techsol.com.br', '1501', '15.01', '6201-5/00', 5.00, 1, '1', 'sincronizada', 'ativa'),
-(@conta_consultoria_id, '33.444.555/0001-66', 'Consultoria Médica XYZ LTDA', 'Consultoria XYZ', '33333', '333.444.555.666', 'Simples Nacional', 'Rua da Medicina, 111, Centro', 'São Paulo', 'SP', '01234-567', '(11) 3333-4444', 'contato@consultoriaxyz.com.br', '1401', '14.01', '8619-0/00', 5.00, 1, '1', 'sincronizada', 'ativa'),
+(@conta_clinica_id, '12.345.678/0001-90', 'Clínica Dr. Santos LTDA', 'Clínica Santos', '12345', '123.456.789.012', 'Simples Nacional', 'Rua das Flores, 123, Centro', 'São Paulo', 'SP', '01234-567', '(11) 1234-5678', 'contato@clinicasantos.com.br', '1401', '14.01', '8619-0/00', 2.01, 1, '1', 'sincronizada', '{"determinacao_impostos_federacao": "Definido pelo Simples Nacional", "determinacao_impostos_municipio": "Definido pelo Simples Nacional"}', 'ativa'),
+(@conta_tech_id, '11.222.333/0001-44', 'Tech Solutions LTDA', 'TechSol', '11111', '111.222.333.444', 'Lucro Real', 'Av. Tecnologia, 789, Vila Tech', 'São Paulo', 'SP', '01234-567', '(11) 1111-2222', 'contato@techsol.com.br', '1501', '15.01', '6201-5/00', 2.01, 1, '1', 'sincronizada', '{"determinacao_impostos_federacao": "Definido pelo Simples Nacional", "determinacao_impostos_municipio": "Definido pelo Simples Nacional"}', 'ativa'),
+(@conta_consultoria_id, '33.444.555/0001-66', 'Consultoria Médica XYZ LTDA', 'Consultoria XYZ', '33333', '333.444.555.666', 'Simples Nacional', 'Rua da Medicina, 111, Centro', 'São Paulo', 'SP', '01234-567', '(11) 3333-4444', 'contato@consultoriaxyz.com.br', '1401', '14.01', '8619-0/00', 2.01, 1, '1', 'sincronizada', '{"determinacao_impostos_federacao": "Definido pelo Simples Nacional", "determinacao_impostos_municipio": "Definido pelo Simples Nacional"}', 'ativa'),
 -- Empresa independente (NÃO cliente)
-(NULL, '99.888.777/0001-11', 'Hospital São Lucas LTDA', 'Hospital São Lucas', '99999', '999.888.777.666', 'Lucro Real', 'Av. das Américas, 1000, Barra da Tijuca', 'Rio de Janeiro', 'RJ', '22640-100', '(21) 3333-4444', 'contato@hospitalsaolucas.com.br', '1401', '14.01', '8619-0/00', 5.00, 1, '1', 'pendente', 'ativa');
+(NULL, '99.888.777/0001-11', 'Hospital São Lucas LTDA', 'Hospital São Lucas', '99999', '999.888.777.666', 'Lucro Real', 'Av. das Américas, 1000, Barra da Tijuca', 'Rio de Janeiro', 'RJ', '22640-100', '(21) 3333-4444', 'contato@hospitalsaolucas.com.br', '1401', '14.01', '8619-0/00', 2.01, 1, '1', 'pendente', '{"determinacao_impostos_federacao": "Definido pelo Simples Nacional", "determinacao_impostos_municipio": "Definido pelo Simples Nacional"}', 'ativa');
 
 -- Inserir pessoas (sócios e funcionários)
 INSERT IGNORE INTO `pessoas` (`nome_completo`, `cpf`, `email`, `telefone`, `data_nascimento`, `registro_profissional`, `especialidade`, `status`) VALUES
@@ -234,7 +234,7 @@ INSERT IGNORE INTO `consultas_enderecos` (`cep`, `logradouro`, `bairro`, `cidade
 -- Este script cria:
 -- - 1 usuário administrador
 -- - 3 contas de exemplo (clientes)
--- - 4 empresas (3 clientes + 1 independente) com campos NFe.io
+-- - 4 empresas (3 clientes + 1 independente) com campos NFe.io e configurações fiscais
 -- - 5 pessoas de exemplo
 -- - 5 vínculos empresa-pessoa (sócios)
 -- - 4 tomadores (1 pessoa + 3 empresas, incluindo 1 independente) com campos NFe.io
@@ -257,3 +257,5 @@ INSERT IGNORE INTO `consultas_enderecos` (`cep`, `logradouro`, `bairro`, `cidade
 -- - FLUXO CORRETO: Empresa → Sócios → Tomadores → Modelos → Nota
 -- - EMPRESA INDEPENDENTE: Hospital São Lucas (não cliente, mas tomador)
 -- - COMPATIBILIDADE COMPLETA COM API NFE.IO
+-- - CONFIGURAÇÕES FISCAIS: Determinação de impostos, alíquota ISS (2.01%), série/número RPS
+-- - CERTIFICADO DIGITAL: Campos preparados para upload (path, senha, validade)

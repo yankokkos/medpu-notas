@@ -1,5 +1,8 @@
 const { query } = require('../../config/database');
 const nfeioService = require('../../services/nfeioService');
+const bcrypt = require('bcrypt');
+const fs = require('fs').promises;
+const path = require('path');
 
 // Listar empresas com filtros e paginação
 const listarEmpresas = async (req, res) => {
@@ -217,6 +220,15 @@ const criarEmpresa = async (req, res) => {
       email,
       dados_fiscais,
       nfeio_empresa_id,
+      // Novos campos de configurações fiscais
+      determinacao_impostos_federacao,
+      determinacao_impostos_municipio,
+      aliquota_iss,
+      serie_rps,
+      numero_rps,
+      certificado_digital_path,
+      certificado_digital_senha,
+      certificado_digital_validade,
       socios // Array de sócios para cadastrar manualmente: [{ nome, cpf?, qualificacao? }]
     } = req.body;
 
@@ -248,17 +260,34 @@ const criarEmpresa = async (req, res) => {
       }
     }
 
+    // Preparar configurações fiscais
+    const configuracoesFiscais = {
+      determinacao_impostos_federacao: determinacao_impostos_federacao || 'Definido pelo Simples Nacional',
+      determinacao_impostos_municipio: determinacao_impostos_municipio || 'Definido pelo Simples Nacional'
+    };
+
+    // Preparar senha do certificado (criptografar se fornecida)
+    let certificadoSenhaHash = null;
+    if (certificado_digital_senha) {
+      certificadoSenhaHash = await bcrypt.hash(certificado_digital_senha, 10);
+    }
+
     // Inserir nova empresa
     const result = await query(`
       INSERT INTO empresas (
         conta_id, cnpj, razao_social, nome_fantasia, inscricao_municipal,
         inscricao_estadual, regime_tributario, endereco, cidade, uf,
-        cep, telefone, email, dados_fiscais, nfeio_empresa_id
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        cep, telefone, email, dados_fiscais, nfeio_empresa_id,
+        aliquota_iss, serie_rps, numero_rps, certificado_digital_path,
+        certificado_digital_senha, certificado_digital_validade, configuracoes_fiscais
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       conta_id, cnpj, razao_social, nome_fantasia, inscricao_municipal,
       inscricao_estadual, regime_tributario, endereco, cidade, uf,
-      cep, telefone, email, JSON.stringify(dados_fiscais), nfeio_empresa_id
+      cep, telefone, email, JSON.stringify(dados_fiscais), nfeio_empresa_id,
+      aliquota_iss || 2.01, serie_rps || '1', numero_rps || 1,
+      certificado_digital_path || null, certificadoSenhaHash, certificado_digital_validade || null,
+      JSON.stringify(configuracoesFiscais)
     ]);
 
     const empresaId = result.insertId;
@@ -395,6 +424,15 @@ const atualizarEmpresa = async (req, res) => {
       dados_fiscais,
       nfeio_empresa_id,
       status,
+      // Novos campos de configurações fiscais
+      determinacao_impostos_federacao,
+      determinacao_impostos_municipio,
+      aliquota_iss,
+      serie_rps,
+      numero_rps,
+      certificado_digital_path,
+      certificado_digital_senha,
+      certificado_digital_validade,
       socios // Array de sócios para atualizar: [{ nome, cpf?, qualificacao?, registro_profissional?, pessoa_id? }]
     } = req.body;
 
@@ -441,6 +479,26 @@ const atualizarEmpresa = async (req, res) => {
       }
     }
 
+    // Preparar configurações fiscais se fornecidas
+    let configuracoesFiscaisUpdate = null;
+    if (determinacao_impostos_federacao !== undefined || determinacao_impostos_municipio !== undefined) {
+      // Buscar configurações atuais
+      const [empresaAtual] = await query('SELECT configuracoes_fiscais FROM empresas WHERE id = ?', [id]);
+      const configAtual = empresaAtual?.configuracoes_fiscais ? JSON.parse(empresaAtual.configuracoes_fiscais) : {};
+      
+      configuracoesFiscaisUpdate = {
+        ...configAtual,
+        ...(determinacao_impostos_federacao !== undefined && { determinacao_impostos_federacao }),
+        ...(determinacao_impostos_municipio !== undefined && { determinacao_impostos_municipio })
+      };
+    }
+
+    // Preparar senha do certificado (criptografar se fornecida)
+    let certificadoSenhaHash = null;
+    if (certificado_digital_senha) {
+      certificadoSenhaHash = await bcrypt.hash(certificado_digital_senha, 10);
+    }
+
     // Atualizar empresa
     await query(`
       UPDATE empresas SET
@@ -459,13 +517,24 @@ const atualizarEmpresa = async (req, res) => {
         email = COALESCE(?, email),
         dados_fiscais = COALESCE(?, dados_fiscais),
         nfeio_empresa_id = COALESCE(?, nfeio_empresa_id),
-        status = COALESCE(?, status)
+        status = COALESCE(?, status),
+        aliquota_iss = COALESCE(?, aliquota_iss),
+        serie_rps = COALESCE(?, serie_rps),
+        numero_rps = COALESCE(?, numero_rps),
+        certificado_digital_path = COALESCE(?, certificado_digital_path),
+        certificado_digital_senha = COALESCE(?, certificado_digital_senha),
+        certificado_digital_validade = COALESCE(?, certificado_digital_validade),
+        configuracoes_fiscais = COALESCE(?, configuracoes_fiscais)
       WHERE id = ?
     `, [
       conta_id, cnpj, razao_social, nome_fantasia, inscricao_municipal,
       inscricao_estadual, regime_tributario, endereco, cidade, uf,
       cep, telefone, email, dados_fiscais ? JSON.stringify(dados_fiscais) : null, 
-      nfeio_empresa_id, status, id
+      nfeio_empresa_id, status,
+      aliquota_iss, serie_rps, numero_rps,
+      certificado_digital_path, certificadoSenhaHash, certificado_digital_validade,
+      configuracoesFiscaisUpdate ? JSON.stringify(configuracoesFiscaisUpdate) : null,
+      id
     ]);
 
     // Se foram fornecidos sócios, atualizar vínculos
@@ -1231,6 +1300,14 @@ const atualizarEmpresaNFeio = async (req, res) => {
     });
 
     if (!resultado.success) {
+      // Atualizar status de sincronização como erro
+      await query(`
+        UPDATE empresas SET 
+          nfeio_sync_status = 'erro',
+          nfeio_sync_at = NOW()
+        WHERE id = ?
+      `, [id]);
+
       return res.status(500).json({
         success: false,
         message: 'Erro ao sincronizar empresa com NFe.io',
@@ -1238,10 +1315,14 @@ const atualizarEmpresaNFeio = async (req, res) => {
       });
     }
 
-    // Atualizar nfeio_empresa_id na empresa local
+    // Atualizar nfeio_empresa_id e status de sincronização na empresa local
     if (resultado.nfeio_empresa_id) {
       await query(`
-        UPDATE empresas SET nfeio_empresa_id = ? WHERE id = ?
+        UPDATE empresas SET 
+          nfeio_empresa_id = ?,
+          nfeio_sync_status = 'sincronizada',
+          nfeio_sync_at = NOW()
+        WHERE id = ?
       `, [resultado.nfeio_empresa_id, id]);
     }
 
@@ -1250,12 +1331,26 @@ const atualizarEmpresaNFeio = async (req, res) => {
       message: 'Empresa sincronizada com sucesso',
       data: {
         id: empresa.id,
-        nfeio_empresa_id: resultado.nfeio_empresa_id
+        nfeio_empresa_id: resultado.nfeio_empresa_id,
+        sync_status: 'sincronizada'
       }
     });
 
   } catch (error) {
     console.error('Erro ao atualizar empresa na NFe.io:', error);
+    
+    // Atualizar status de sincronização como erro
+    try {
+      await query(`
+        UPDATE empresas SET 
+          nfeio_sync_status = 'erro',
+          nfeio_sync_at = NOW()
+        WHERE id = ?
+      `, [req.params.id]);
+    } catch (updateError) {
+      console.error('Erro ao atualizar status de sincronização:', updateError);
+    }
+
     res.status(500).json({
       success: false,
       message: 'Erro interno do servidor'
@@ -1293,6 +1388,108 @@ const listarEmpresasNFeio = async (req, res) => {
   }
 };
 
+// Upload de certificado digital
+const uploadCertificadoDigital = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { senha, validade } = req.body;
+    const file = req.file;
+
+    // Verificar se empresa existe
+    const [empresa] = await query('SELECT id FROM empresas WHERE id = ?', [id]);
+    if (!empresa) {
+      return res.status(404).json({
+        success: false,
+        message: 'Empresa não encontrada'
+      });
+    }
+
+    // Validar arquivo
+    if (!file) {
+      return res.status(400).json({
+        success: false,
+        message: 'Arquivo de certificado não fornecido'
+      });
+    }
+
+    // Validar extensão
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (!['.pfx', '.p12'].includes(ext)) {
+      // Remover arquivo inválido
+      await fs.unlink(file.path).catch(() => {});
+      return res.status(400).json({
+        success: false,
+        message: 'Formato de arquivo inválido. Use .pfx ou .p12'
+      });
+    }
+
+    // Validar tamanho (máximo 5MB)
+    const maxSize = 5 * 1024 * 1024; // 5MB
+    if (file.size > maxSize) {
+      await fs.unlink(file.path).catch(() => {});
+      return res.status(400).json({
+        success: false,
+        message: 'Arquivo muito grande. Tamanho máximo: 5MB'
+      });
+    }
+
+    // Criar diretório de certificados se não existir
+    const certificadosDir = path.join(process.cwd(), 'uploads', 'certificados');
+    await fs.mkdir(certificadosDir, { recursive: true });
+    
+    // Remover certificado antigo se existir
+    if (empresa.certificado_digital_path) {
+      try {
+        await fs.unlink(empresa.certificado_digital_path).catch(() => {});
+      } catch (oldFileError) {
+        // Ignorar erro se arquivo não existir
+      }
+    }
+    
+    const fileName = `certificado_${id}_${Date.now()}${ext}`;
+    const filePath = path.join(certificadosDir, fileName);
+    await fs.rename(file.path, filePath);
+
+    // Criptografar senha se fornecida
+    let senhaHash = null;
+    if (senha && senha.trim()) {
+      senhaHash = await bcrypt.hash(senha, 10);
+    }
+
+    // Atualizar empresa com informações do certificado
+    await query(`
+      UPDATE empresas SET
+        certificado_digital_path = ?,
+        certificado_digital_senha = COALESCE(?, certificado_digital_senha),
+        certificado_digital_validade = ?
+      WHERE id = ?
+    `, [filePath, senhaHash, validade || null, id]);
+
+    res.json({
+      success: true,
+      message: 'Certificado digital enviado com sucesso',
+      data: {
+        path: filePath,
+        validade: validade || null
+      }
+    });
+
+  } catch (error) {
+    console.error('Erro ao fazer upload de certificado:', error);
+    
+    // Limpar arquivo se houver erro
+    if (req.file?.path) {
+      await fs.unlink(req.file.path).catch(() => {});
+    }
+
+    res.status(500).json({
+      success: false,
+      message: 'Erro interno do servidor',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
 module.exports = {
   listarEmpresas,
   obterEmpresa,
@@ -1304,5 +1501,6 @@ module.exports = {
   sincronizarComNFeio,
   importarEmpresaNFeio,
   atualizarEmpresaNFeio,
-  listarEmpresasNFeio
+  listarEmpresasNFeio,
+  uploadCertificadoDigital
 };

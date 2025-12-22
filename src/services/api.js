@@ -181,6 +181,23 @@ export const empresasService = {
   async sincronizarEmpresaNFeio(id) {
     const response = await api.post(`/empresas/${id}/sincronizar-nfeio`);
     return response.data;
+  },
+
+  async uploadCertificadoDigital(empresaId, file, senha, validade) {
+    const formData = new FormData();
+    formData.append('certificado', file);
+    if (senha) {
+      formData.append('senha', senha);
+    }
+    if (validade) {
+      formData.append('validade', validade);
+    }
+    const response = await api.post(`/empresas/${empresaId}/certificado-digital`, formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data'
+      }
+    });
+    return response.data;
   }
 };
 

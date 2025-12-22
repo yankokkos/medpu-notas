@@ -1,4 +1,6 @@
 const express = require('express');
+const multer = require('multer');
+const path = require('path');
 const { 
   listarEmpresas, 
   obterEmpresa, 
@@ -10,12 +12,46 @@ const {
   sincronizarComNFeio,
   importarEmpresaNFeio,
   atualizarEmpresaNFeio,
-  listarEmpresasNFeio
+  listarEmpresasNFeio,
+  uploadCertificadoDigital
 } = require('./controller');
 const { authenticateToken, authorize } = require('../../middleware/auth');
 const { validateCreate } = require('../../middleware/validation');
 
 const router = express.Router();
+
+// Criar diretório de uploads/temp se não existir
+const fs = require('fs');
+const uploadsTempDir = path.join(process.cwd(), 'uploads', 'temp');
+if (!fs.existsSync(uploadsTempDir)) {
+  fs.mkdirSync(uploadsTempDir, { recursive: true });
+}
+
+// Configurar multer para upload de certificados
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    cb(null, uploadsTempDir);
+  },
+  filename: function (req, file, cb) {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, 'cert-' + uniqueSuffix + path.extname(file.originalname));
+  }
+});
+
+const upload = multer({
+  storage: storage,
+  limits: {
+    fileSize: 5 * 1024 * 1024 // 5MB
+  },
+  fileFilter: function (req, file, cb) {
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (['.pfx', '.p12'].includes(ext)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Formato de arquivo inválido. Use .pfx ou .p12'));
+    }
+  }
+});
 
 // Todas as rotas requerem autenticação
 router.use(authenticateToken);
@@ -45,6 +81,13 @@ router.post('/importar-nfeio',
 router.post('/:id/sincronizar-nfeio', 
   authorize(['empresas:write', '*']), 
   atualizarEmpresaNFeio
+);
+
+// Upload de certificado digital
+router.post('/:id/certificado-digital', 
+  authorize(['empresas:write', '*']),
+  upload.single('certificado'),
+  uploadCertificadoDigital
 );
 
 // Obter empresa por ID

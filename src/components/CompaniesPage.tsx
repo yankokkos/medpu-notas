@@ -387,6 +387,18 @@ export function CompaniesPage() {
     cep: '',
     telefone: '',
     email: '',
+    // Configurações fiscais
+    determinacao_impostos_federacao: 'Definido pelo Simples Nacional',
+    determinacao_impostos_municipio: 'Definido pelo Simples Nacional',
+    aliquota_iss: '2.01',
+    serie_rps: '1',
+    numero_rps: 1,
+    // Certificado digital
+    certificado_digital_path: '',
+    certificado_digital_senha: '',
+    certificado_digital_validade: '',
+    certificado_digital_file: null as File | null,
+    certificado_tipo: 'path' as 'path' | 'upload',
   });
 
   // Dados carregados da API - não há mais dados mock
@@ -412,22 +424,49 @@ export function CompaniesPage() {
     e.preventDefault();
     
     try {
+      // Preparar dados básicos
+      const dadosEmpresa: any = {
+        ...formData,
+        aliquota_iss: parseFloat(formData.aliquota_iss) || 2.01,
+        numero_rps: formData.numero_rps || 1,
+        socios: (editingCompany ? sociosManuais : sociosManuais).length > 0 
+          ? (editingCompany ? sociosManuais : sociosManuais).filter(s => s.nome.trim()).map(s => ({
+              nome: s.nome,
+              cpf: s.cpf || undefined,
+              qualificacao: s.qualificacao || undefined,
+              registro_profissional: s.registro_profissional || undefined,
+              ...(editingCompany && s.pessoa_id ? { pessoa_id: s.pessoa_id } : {})
+            }))
+          : undefined
+      };
+
+      // Remover campos de arquivo do formData (serão enviados separadamente)
+      delete dadosEmpresa.certificado_digital_file;
+      delete dadosEmpresa.certificado_tipo;
+
+      let empresaId: number | null = null;
+
       if (editingCompany) {
         // Update existing company
-        // Preparar dados incluindo sócios se houver
-        const dadosEmpresa = {
-          ...formData,
-          socios: sociosManuais.length > 0 ? sociosManuais.filter(s => s.nome.trim()).map(s => ({
-            nome: s.nome,
-            cpf: s.cpf || undefined,
-            qualificacao: s.qualificacao || undefined,
-            registro_profissional: s.registro_profissional || undefined,
-            pessoa_id: s.pessoa_id || undefined // Para identificar sócios existentes
-          })) : undefined
-        };
-        
         const response = await empresasService.atualizar(editingCompany.id, dadosEmpresa);
         if (response.success) {
+          empresaId = editingCompany.id;
+          
+          // Upload de certificado se fornecido
+          if (formData.certificado_digital_file) {
+            try {
+              await empresasService.uploadCertificadoDigital(
+                editingCompany.id,
+                formData.certificado_digital_file,
+                formData.certificado_digital_senha,
+                formData.certificado_digital_validade
+              );
+            } catch (certError) {
+              console.error('Erro ao fazer upload do certificado:', certError);
+              toast.error('Empresa atualizada, mas houve erro ao fazer upload do certificado');
+            }
+          }
+
           toast.success('Empresa atualizada com sucesso!', {
             description: `${formData.razao_social} foi atualizada.`
           });
@@ -437,26 +476,28 @@ export function CompaniesPage() {
         }
       } else {
         // Add new company
-        // Preparar dados incluindo sócios manuais se houver
-        const dadosEmpresa = {
-          ...formData,
-          socios: sociosManuais.length > 0 ? sociosManuais.filter(s => s.nome.trim()).map(s => ({
-            nome: s.nome,
-            cpf: s.cpf || undefined,
-            qualificacao: s.qualificacao || undefined,
-            registro_profissional: s.registro_profissional || undefined
-          })) : undefined
-        };
-        
         const response = await empresasService.criar(dadosEmpresa);
         if (response.success) {
-          toast.success('Empresa cadastrada com sucesso!', {
-            description: `${formData.razao_social} foi adicionada ao sistema.`
-          });
+          empresaId = response.data?.empresa?.id || response.data?.id;
+          
+          // Upload de certificado se fornecido
+          if (formData.certificado_digital_file && empresaId) {
+            try {
+              await empresasService.uploadCertificadoDigital(
+                empresaId,
+                formData.certificado_digital_file,
+                formData.certificado_digital_senha,
+                formData.certificado_digital_validade
+              );
+            } catch (certError) {
+              console.error('Erro ao fazer upload do certificado:', certError);
+              toast.error('Empresa criada, mas houve erro ao fazer upload do certificado');
+            }
+          }
           
           // Se houver sócios encontrados na consulta CNPJ, perguntar se deseja adicioná-los
           if (sociosEncontrados && sociosEncontrados.length > 0) {
-            setEmpresaCriadaId(response.data?.empresa?.id || response.data?.id);
+            setEmpresaCriadaId(empresaId);
             setShowDialogSocios(true);
           } else {
             resetForm();
@@ -464,11 +505,6 @@ export function CompaniesPage() {
             loadCompanies();
           }
         }
-      }
-      
-      if (editingCompany) {
-        resetForm();
-        setIsAddDialogOpen(false);
       }
     } catch (error) {
       console.error('Erro ao salvar empresa:', error);
@@ -490,7 +526,17 @@ export function CompaniesPage() {
       cep: '',
       telefone: '',
       email: '',
-    },);
+      determinacao_impostos_federacao: 'Definido pelo Simples Nacional',
+      determinacao_impostos_municipio: 'Definido pelo Simples Nacional',
+      aliquota_iss: '2.01',
+      serie_rps: '1',
+      numero_rps: 1,
+      certificado_digital_path: '',
+      certificado_digital_senha: '',
+      certificado_digital_validade: '',
+      certificado_digital_file: null,
+      certificado_tipo: 'path',
+    });
     setEditingCompany(null);
     setIsAddDialogOpen(false);
     setSociosEncontrados([]);
@@ -500,6 +546,13 @@ export function CompaniesPage() {
   };
 
   const handleEdit = async (company) => {
+    // Parse configurações fiscais se existir
+    const configFiscais = company.configuracoes_fiscais 
+      ? (typeof company.configuracoes_fiscais === 'string' 
+          ? JSON.parse(company.configuracoes_fiscais) 
+          : company.configuracoes_fiscais)
+      : {};
+
     setFormData({
       conta_id: company.conta_id,
       cnpj: company.cnpj,
@@ -513,7 +566,17 @@ export function CompaniesPage() {
       cep: company.cep,
       telefone: company.telefone || '',
       email: company.email || '',
-    },);
+      determinacao_impostos_federacao: configFiscais.determinacao_impostos_federacao || 'Definido pelo Simples Nacional',
+      determinacao_impostos_municipio: configFiscais.determinacao_impostos_municipio || 'Definido pelo Simples Nacional',
+      aliquota_iss: company.aliquota_iss?.toString() || '2.01',
+      serie_rps: company.serie_rps || '1',
+      numero_rps: company.numero_rps || 1,
+      certificado_digital_path: company.certificado_digital_path || '',
+      certificado_digital_senha: '', // Não carregar senha por segurança
+      certificado_digital_validade: company.certificado_digital_validade || '',
+      certificado_digital_file: null,
+      certificado_tipo: company.certificado_digital_path ? 'path' : 'upload',
+    });
     setEditingCompany(company);
     
     // Buscar sócios vinculados à empresa
@@ -1092,6 +1155,213 @@ export function CompaniesPage() {
                         ))}
                       </div>
                     )}
+                  </div>
+                )}
+
+                {/* Seção de Configurações Fiscais */}
+                <div className="space-y-4 border-t pt-4 mt-4">
+                  <div>
+                    <h3 className="text-lg font-semibold">Configurações Fiscais</h3>
+                    <p className="text-sm text-muted-foreground">
+                      Configure as opções fiscais e de RPS para esta empresa
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <Label htmlFor="determinacao_impostos_federacao">Determinação dos impostos pela federação</Label>
+                      <Select 
+                        value={formData.determinacao_impostos_federacao} 
+                        onValueChange={(value) => setFormData({ ...formData, determinacao_impostos_federacao: value })}
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="Definido pelo Simples Nacional">Definido pelo Simples Nacional</SelectItem>
+                          <SelectItem value="Definido pela empresa">Definido pela empresa</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div>
+                      <Label htmlFor="determinacao_impostos_municipio">Determinação dos impostos pelo município</Label>
+                      <Select 
+                        value={formData.determinacao_impostos_municipio} 
+                        onValueChange={(value) => setFormData({ ...formData, determinacao_impostos_municipio: value })}
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="Definido pelo Simples Nacional">Definido pelo Simples Nacional</SelectItem>
+                          <SelectItem value="Definido pela empresa">Definido pela empresa</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div>
+                      <Label htmlFor="aliquota_iss">Alíquota ISS para Simples Nacional (%)</Label>
+                      <Input
+                        id="aliquota_iss"
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        max="100"
+                        value={formData.aliquota_iss}
+                        onChange={(e) => setFormData({ ...formData, aliquota_iss: e.target.value })}
+                        placeholder="2.01"
+                      />
+                    </div>
+
+                    <div>
+                      <Label htmlFor="serie_rps">Série do RPS</Label>
+                      <Input
+                        id="serie_rps"
+                        value={formData.serie_rps}
+                        onChange={(e) => setFormData({ ...formData, serie_rps: e.target.value })}
+                        placeholder="1"
+                      />
+                    </div>
+
+                    <div>
+                      <Label htmlFor="numero_rps">Número do RPS</Label>
+                      <Input
+                        id="numero_rps"
+                        type="number"
+                        min="1"
+                        value={formData.numero_rps}
+                        onChange={(e) => setFormData({ ...formData, numero_rps: parseInt(e.target.value) || 1 })}
+                        placeholder="1"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Seção de Certificado Digital */}
+                <div className="space-y-4 border-t pt-4 mt-4">
+                  <div>
+                    <h3 className="text-lg font-semibold">Certificado Digital</h3>
+                    <p className="text-sm text-muted-foreground">
+                      Configure o certificado digital para emissão de notas fiscais
+                    </p>
+                  </div>
+
+                  <div className="space-y-4">
+                    <div>
+                      <Label>Tipo de certificado</Label>
+                      <div className="flex gap-4 mt-2">
+                        <label className="flex items-center space-x-2 cursor-pointer">
+                          <input
+                            type="radio"
+                            value="path"
+                            checked={formData.certificado_tipo === 'path'}
+                            onChange={(e) => setFormData({ ...formData, certificado_tipo: e.target.value as 'path' | 'upload' })}
+                            className="w-4 h-4"
+                          />
+                          <span>Caminho do arquivo</span>
+                        </label>
+                        <label className="flex items-center space-x-2 cursor-pointer">
+                          <input
+                            type="radio"
+                            value="upload"
+                            checked={formData.certificado_tipo === 'upload'}
+                            onChange={(e) => setFormData({ ...formData, certificado_tipo: e.target.value as 'path' | 'upload' })}
+                            className="w-4 h-4"
+                          />
+                          <span>Upload de arquivo</span>
+                        </label>
+                      </div>
+                    </div>
+
+                    {formData.certificado_tipo === 'path' ? (
+                      <div>
+                        <Label htmlFor="certificado_digital_path">Caminho do certificado</Label>
+                        <Input
+                          id="certificado_digital_path"
+                          value={formData.certificado_digital_path}
+                          onChange={(e) => setFormData({ ...formData, certificado_digital_path: e.target.value })}
+                          placeholder="/caminho/para/certificado.pfx"
+                        />
+                      </div>
+                    ) : (
+                      <div>
+                        <Label htmlFor="certificado_digital_file">Arquivo do certificado (.pfx ou .p12)</Label>
+                        <Input
+                          id="certificado_digital_file"
+                          type="file"
+                          accept=".pfx,.p12"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file) {
+                              setFormData({ ...formData, certificado_digital_file: file });
+                            }
+                          }}
+                        />
+                        <p className="text-xs text-muted-foreground mt-1">
+                          Tamanho máximo: 5MB
+                        </p>
+                      </div>
+                    )}
+
+                    <div>
+                      <Label htmlFor="certificado_digital_senha">Senha do certificado</Label>
+                      <Input
+                        id="certificado_digital_senha"
+                        type="password"
+                        value={formData.certificado_digital_senha}
+                        onChange={(e) => setFormData({ ...formData, certificado_digital_senha: e.target.value })}
+                        placeholder="Senha do certificado"
+                      />
+                    </div>
+
+                    <div>
+                      <Label htmlFor="certificado_digital_validade">Data de validade (opcional)</Label>
+                      <Input
+                        id="certificado_digital_validade"
+                        type="date"
+                        value={formData.certificado_digital_validade}
+                        onChange={(e) => setFormData({ ...formData, certificado_digital_validade: e.target.value })}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Seção de Integração NFe.io */}
+                {editingCompany && (
+                  <div className="space-y-4 border-t pt-4 mt-4">
+                    <div>
+                      <h3 className="text-lg font-semibold">Integração NFe.io</h3>
+                      <p className="text-sm text-muted-foreground">
+                        Sincronize esta empresa com a NFe.io para emitir notas fiscais
+                      </p>
+                    </div>
+
+                    <div className="flex items-center justify-between p-4 border rounded-md">
+                      <div>
+                        <p className="font-medium">Status da sincronização</p>
+                        <p className="text-sm text-muted-foreground">
+                          {editingCompany.nfeio_sync_status === 'sincronizada' 
+                            ? `Sincronizada (ID: ${editingCompany.nfeio_empresa_id || 'N/A'})`
+                            : editingCompany.nfeio_sync_status === 'erro'
+                            ? 'Erro na sincronização'
+                            : 'Não sincronizada'}
+                        </p>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => handleSyncEmpresa(editingCompany.id)}
+                        disabled={syncLoading}
+                      >
+                        {syncLoading ? (
+                          <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                        ) : (
+                          <RefreshCw className="h-4 w-4 mr-2" />
+                        )}
+                        Sincronizar com NFe.io
+                      </Button>
+                    </div>
                   </div>
                 )}
               </div>
