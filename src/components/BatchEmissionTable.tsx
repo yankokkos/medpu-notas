@@ -19,19 +19,32 @@ import {
 } from './ui/table';
 import { Plus, Trash2, X } from 'lucide-react';
 import { Textarea } from './ui/textarea';
-import { empresasService, tomadoresService, pessoasService, modelosService } from '../services/api';
+import { empresasService, tomadoresService, pessoasService, modelosService, consultasService } from '../services/api';
 import { toast } from 'sonner';
+import { Search } from 'lucide-react';
 
 interface BatchRow {
   id: string;
   empresa_id: string;
   tomador_id: string;
+  // Campos para tomador não cadastrado
+  tomador_nome?: string;
+  tomador_cpf_cnpj?: string;
+  tomador_tipo?: 'PESSOA' | 'EMPRESA';
+  tomador_cep?: string;
+  tomador_logradouro?: string;
+  tomador_numero?: string;
+  tomador_complemento?: string;
+  tomador_bairro?: string;
+  tomador_cidade?: string;
+  tomador_uf?: string;
   socios_ids: number[];
   valores: Record<number, number>;
   mes_competencia: string;
   modelo_id?: string;
   discriminacao?: string;
   codigo_servico_municipal?: string;
+  cnae_code?: string; // CNAE do prestador para esta nota específica
 }
 
 interface BatchEmissionTableProps {
@@ -46,6 +59,7 @@ export function BatchEmissionTable({ rows, onRowsChange, validationErrors = {} }
   const [sociosPorEmpresa, setSociosPorEmpresa] = useState<Record<number, any[]>>({});
   const [modelos, setModelos] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
+  const [consultandoCEP, setConsultandoCEP] = useState<Record<string, boolean>>({});
 
   // Carregar empresas
   useEffect(() => {
@@ -200,6 +214,56 @@ export function BatchEmissionTable({ rows, onRowsChange, validationErrors = {} }
     return Object.values(row.valores || {}).reduce((sum, val) => sum + (parseFloat(String(val)) || 0), 0);
   };
 
+  // Função para buscar CEP
+  const handleConsultarCEP = async (rowId: string, cep: string) => {
+    const cepLimpo = cep.replace(/[^\d]/g, '');
+    
+    if (cepLimpo.length !== 8) {
+      toast.error('CEP inválido', {
+        description: 'O CEP deve ter 8 dígitos'
+      });
+      return;
+    }
+
+    try {
+      setConsultandoCEP(prev => ({ ...prev, [rowId]: true }));
+      const response = await consultasService.consultarEnderecoPorCEP(cepLimpo);
+      
+      if (response.success && response.data) {
+        const dados = response.data;
+        
+        updateRow(rowId, {
+          tomador_logradouro: dados.logradouro || '',
+          tomador_bairro: dados.bairro || '',
+          tomador_cidade: dados.cidade || '',
+          tomador_uf: dados.uf || '',
+          tomador_cep: dados.cep || cepLimpo
+        });
+
+        toast.success('Endereço encontrado!', {
+          description: 'Os dados do endereço foram preenchidos automaticamente'
+        });
+      } else {
+        toast.error('Erro ao consultar CEP', {
+          description: response.message || 'CEP não encontrado ou erro na consulta'
+        });
+      }
+    } catch (error: any) {
+      console.error('Erro ao consultar CEP:', error);
+      toast.error('Erro ao consultar CEP', {
+        description: error.response?.data?.message || 'Verifique sua conexão e tente novamente'
+      });
+    } finally {
+      setConsultandoCEP(prev => ({ ...prev, [rowId]: false }));
+    }
+  };
+
+  // Detectar se é CPF ou CNPJ
+  const detectarTipoDocumento = (doc: string): 'PESSOA' | 'EMPRESA' => {
+    const docLimpo = doc.replace(/[^\d]/g, '');
+    return docLimpo.length === 11 ? 'PESSOA' : 'EMPRESA';
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex justify-between items-center">
@@ -215,10 +279,12 @@ export function BatchEmissionTable({ rows, onRowsChange, validationErrors = {} }
           <TableHeader>
             <TableRow>
               <TableHead className="w-[200px]">Empresa</TableHead>
-              <TableHead className="w-[200px]">Tomador</TableHead>
+              <TableHead className="w-[200px]">Tomador (Cadastrado)</TableHead>
+              <TableHead className="w-[300px]">Tomador (Não Cadastrado)</TableHead>
               <TableHead className="w-[300px]">Sócios e Valores</TableHead>
               <TableHead className="w-[120px]">Mês Competência</TableHead>
               <TableHead className="w-[150px]">Cód. Serviço Municipal *</TableHead>
+              <TableHead className="w-[120px]">CNAE *</TableHead>
               <TableHead className="w-[200px]">Modelo (Opcional)</TableHead>
               <TableHead className="w-[250px]">Discriminação</TableHead>
               <TableHead className="w-[100px]">Total</TableHead>
@@ -228,7 +294,7 @@ export function BatchEmissionTable({ rows, onRowsChange, validationErrors = {} }
           <TableBody>
             {rows.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={9} className="text-center text-muted-foreground py-8">
+                <TableCell colSpan={11} className="text-center text-muted-foreground py-8">
                   Nenhuma linha adicionada. Clique em "Adicionar Linha" para começar.
                 </TableCell>
               </TableRow>
@@ -241,21 +307,40 @@ export function BatchEmissionTable({ rows, onRowsChange, validationErrors = {} }
                 return (
                   <TableRow key={row.id} className={errors.length > 0 ? 'bg-red-50' : ''}>
                     <TableCell>
-                      <Select
-                        value={row.empresa_id}
-                        onValueChange={(value) => updateRow(row.id, { empresa_id: value })}
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder="Selecione" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {empresas.map((emp) => (
-                            <SelectItem key={emp.id} value={String(emp.id)}>
-                              {emp.razao_social}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                      <div className="space-y-1">
+                        <Select
+                          value={row.empresa_id && empresas.find(e => String(e.id) === row.empresa_id) ? row.empresa_id : 'custom'}
+                          onValueChange={(value) => {
+                            if (value === 'custom') {
+                              // Permitir edição manual do CNPJ
+                              updateRow(row.id, { empresa_id: '' });
+                            } else {
+                              updateRow(row.id, { empresa_id: value });
+                            }
+                          }}
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder="Selecione ou digite CNPJ" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="custom">Digitar CNPJ manualmente</SelectItem>
+                            {empresas.map((emp) => (
+                              <SelectItem key={emp.id} value={String(emp.id)}>
+                                {emp.razao_social} - {emp.cnpj}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        {(!row.empresa_id || !empresas.find(e => String(e.id) === row.empresa_id)) && (
+                          <Input
+                            type="text"
+                            value={row.empresa_id || ''}
+                            onChange={(e) => updateRow(row.id, { empresa_id: e.target.value })}
+                            placeholder="CNPJ da empresa (apenas números)"
+                            className="w-full h-7 text-xs mt-1"
+                          />
+                        )}
+                      </div>
                       {errors.some(e => e.includes('empresa')) && (
                         <p className="text-xs text-red-500 mt-1">{errors.find(e => e.includes('empresa'))}</p>
                       )}
@@ -263,13 +348,20 @@ export function BatchEmissionTable({ rows, onRowsChange, validationErrors = {} }
 
                     <TableCell>
                       <Select
-                        value={row.tomador_id}
-                        onValueChange={(value) => updateRow(row.id, { tomador_id: value })}
+                        value={row.tomador_id || 'none'}
+                        onValueChange={(value) => {
+                          if (value === 'none') {
+                            updateRow(row.id, { tomador_id: '', tomador_nome: '', tomador_cpf_cnpj: '', tomador_tipo: undefined });
+                          } else {
+                            updateRow(row.id, { tomador_id: value, tomador_nome: '', tomador_cpf_cnpj: '', tomador_tipo: undefined });
+                          }
+                        }}
                       >
                         <SelectTrigger>
-                          <SelectValue placeholder="Selecione" />
+                          <SelectValue placeholder="Selecione ou preencha abaixo" />
                         </SelectTrigger>
                         <SelectContent>
+                          <SelectItem value="none">Usar dados abaixo</SelectItem>
                           {tomadores.map((tom) => (
                             <SelectItem key={tom.id} value={String(tom.id)}>
                               {tom.nome_razao_social_unificado || tom.nome_razao_social}
@@ -279,6 +371,145 @@ export function BatchEmissionTable({ rows, onRowsChange, validationErrors = {} }
                       </Select>
                       {errors.some(e => e.includes('tomador')) && (
                         <p className="text-xs text-red-500 mt-1">{errors.find(e => e.includes('tomador'))}</p>
+                      )}
+                    </TableCell>
+
+                    <TableCell>
+                      <div className="space-y-2">
+                        <div>
+                          <Label className="text-xs">Nome/Razão Social *</Label>
+                          <Input
+                            type="text"
+                            value={row.tomador_nome || ''}
+                            onChange={(e) => updateRow(row.id, { tomador_nome: e.target.value })}
+                            placeholder="Nome ou Razão Social"
+                            className="w-full h-7 text-xs"
+                            disabled={!!row.tomador_id}
+                          />
+                        </div>
+                        <div className="flex gap-2">
+                          <div>
+                            <Label className="text-xs">CPF/CNPJ *</Label>
+                            <Input
+                              type="text"
+                              value={row.tomador_cpf_cnpj || ''}
+                              onChange={(e) => {
+                                const doc = e.target.value;
+                                const tipo = detectarTipoDocumento(doc);
+                                updateRow(row.id, { 
+                                  tomador_cpf_cnpj: doc,
+                                  tomador_tipo: tipo
+                                });
+                              }}
+                              placeholder="000.000.000-00 ou 00.000.000/0000-00"
+                              className="w-full h-7 text-xs"
+                              disabled={!!row.tomador_id}
+                            />
+                          </div>
+                        </div>
+                        <div className="flex gap-2">
+                          <div className="flex-1">
+                            <Label className="text-xs">CEP</Label>
+                            <div className="flex gap-1">
+                              <Input
+                                type="text"
+                                value={row.tomador_cep || ''}
+                                onChange={(e) => updateRow(row.id, { tomador_cep: e.target.value })}
+                                onBlur={(e) => {
+                                  const cep = e.target.value;
+                                  if (cep && cep.replace(/[^\d]/g, '').length === 8) {
+                                    handleConsultarCEP(row.id, cep);
+                                  }
+                                }}
+                                placeholder="00000-000"
+                                className="w-full h-7 text-xs"
+                                disabled={!!row.tomador_id}
+                              />
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                className="h-7 px-2"
+                                onClick={() => row.tomador_cep && handleConsultarCEP(row.id, row.tomador_cep)}
+                                disabled={!!row.tomador_id || !row.tomador_cep || consultandoCEP[row.id]}
+                              >
+                                <Search className="w-3 h-3" />
+                              </Button>
+                            </div>
+                          </div>
+                          <div className="flex-1">
+                            <Label className="text-xs">UF</Label>
+                            <Input
+                              type="text"
+                              value={row.tomador_uf || ''}
+                              onChange={(e) => updateRow(row.id, { tomador_uf: e.target.value.toUpperCase().slice(0, 2) })}
+                              placeholder="UF"
+                              className="w-full h-7 text-xs"
+                              maxLength={2}
+                              disabled={!!row.tomador_id}
+                            />
+                          </div>
+                        </div>
+                        <div>
+                          <Label className="text-xs">Logradouro</Label>
+                          <Input
+                            type="text"
+                            value={row.tomador_logradouro || ''}
+                            onChange={(e) => updateRow(row.id, { tomador_logradouro: e.target.value })}
+                            placeholder="Rua, Avenida, etc"
+                            className="w-full h-7 text-xs"
+                            disabled={!!row.tomador_id}
+                          />
+                        </div>
+                        <div className="flex gap-2">
+                          <div className="flex-1">
+                            <Label className="text-xs">Número</Label>
+                            <Input
+                              type="text"
+                              value={row.tomador_numero || ''}
+                              onChange={(e) => updateRow(row.id, { tomador_numero: e.target.value })}
+                              placeholder="Número"
+                              className="w-full h-7 text-xs"
+                              disabled={!!row.tomador_id}
+                            />
+                          </div>
+                          <div className="flex-1">
+                            <Label className="text-xs">Complemento</Label>
+                            <Input
+                              type="text"
+                              value={row.tomador_complemento || ''}
+                              onChange={(e) => updateRow(row.id, { tomador_complemento: e.target.value })}
+                              placeholder="Apto, Sala, etc"
+                              className="w-full h-7 text-xs"
+                              disabled={!!row.tomador_id}
+                            />
+                          </div>
+                        </div>
+                        <div>
+                          <Label className="text-xs">Bairro</Label>
+                          <Input
+                            type="text"
+                            value={row.tomador_bairro || ''}
+                            onChange={(e) => updateRow(row.id, { tomador_bairro: e.target.value })}
+                            placeholder="Bairro"
+                            className="w-full h-7 text-xs"
+                            disabled={!!row.tomador_id}
+                          />
+                        </div>
+                        <div>
+                          <Label className="text-xs">Cidade</Label>
+                          <Input
+                            type="text"
+                            value={row.tomador_cidade || ''}
+                            onChange={(e) => updateRow(row.id, { tomador_cidade: e.target.value })}
+                            placeholder="Cidade"
+                            className="w-full h-7 text-xs"
+                            disabled={!!row.tomador_id}
+                          />
+                        </div>
+                      </div>
+                      {errors.some(e => e.includes('tomador') && !e.includes('cadastrado')) && (
+                        <p className="text-xs text-red-500 mt-1">{errors.find(e => e.includes('tomador') && !e.includes('cadastrado'))}</p>
                       )}
                     </TableCell>
 
@@ -349,6 +580,24 @@ export function BatchEmissionTable({ rows, onRowsChange, validationErrors = {} }
                       )}
                       <p className="text-xs text-muted-foreground mt-1">
                         Obrigatório para emissão
+                      </p>
+                    </TableCell>
+
+                    <TableCell>
+                      <Input
+                        type="text"
+                        value={row.cnae_code || ''}
+                        onChange={(e) => updateRow(row.id, { cnae_code: e.target.value })}
+                        placeholder="Ex: 6201-5/00"
+                        className="w-full"
+                      />
+                      {errors.some(e => e.includes('CNAE') || e.includes('cnae')) && (
+                        <p className="text-xs text-red-500 mt-1">
+                          {errors.find(e => e.includes('CNAE') || e.includes('cnae'))}
+                        </p>
+                      )}
+                      <p className="text-xs text-muted-foreground mt-1">
+                        CNAE do prestador para esta nota
                       </p>
                     </TableCell>
 

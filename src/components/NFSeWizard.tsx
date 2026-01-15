@@ -178,8 +178,8 @@ export function NFSeWizard({ isOpen, onClose }: NFSeWizardProps) {
   const [tomadores, setTomadores] = useState([] as Tomador[]);
   const [modelos, setModelos] = useState([] as Modelo[]);
   const [empresaCompleta, setEmpresaCompleta] = useState(null as any);
-  const [calculoImpostos, setCalculoImpostos] = useState<any>(null);
-  const [calculandoImpostos, setCalculandoImpostos] = useState(false);
+  const [codigosFrequentes, setCodigosFrequentes] = useState<{codigos_servico: string[], cnaes: string[]}>({codigos_servico: [], cnaes: []});
+  const [loadingCodigos, setLoadingCodigos] = useState(false);
 
   // Estados para seções colapsáveis
   const [showRetencoes, setShowRetencoes] = useState(false);
@@ -406,12 +406,35 @@ export function NFSeWizard({ isOpen, onClose }: NFSeWizardProps) {
           setFormData(prev => ({
             ...prev,
             codigo_servico_municipal: empresa.codigo_servico_municipal || '',
+            cnae_code: empresa.cnae_code || '',
             aliquota_iss: empresa.aliquota_iss ? parseFloat(empresa.aliquota_iss) : 0,
           }));
         }
       }
+      
+      // Buscar códigos frequentemente usados
+      await loadCodigosFrequentes(empresaId);
     } catch (error) {
       console.error('Erro ao carregar dados completos da empresa:', error);
+    }
+  };
+
+  // Carregar códigos de serviço e CNAEs frequentemente usados
+  const loadCodigosFrequentes = async (empresaId: number) => {
+    try {
+      setLoadingCodigos(true);
+      const response = await empresasService.buscarCodigosFrequentes(empresaId);
+      if (response.success) {
+        setCodigosFrequentes({
+          codigos_servico: response.data.codigos_servico || [],
+          cnaes: response.data.cnaes || []
+        });
+      }
+    } catch (error) {
+      console.error('Erro ao carregar códigos frequentes:', error);
+      setCodigosFrequentes({ codigos_servico: [], cnaes: [] });
+    } finally {
+      setLoadingCodigos(false);
     }
   };
 
@@ -430,54 +453,6 @@ export function NFSeWizard({ isOpen, onClose }: NFSeWizardProps) {
     setFormData(prev => ({ ...prev, valor_iss: valorISS }));
   }, [formData.valores, formData.aliquota_iss, formData.valor_deducoes, formData.desconto_incondicionado, formData.desconto_condicionado]);
 
-  // Calcular impostos quando entrar na pré-visualização
-  useEffect(() => {
-    if (currentStep === 5) {
-      calcularImpostosPreview();
-    }
-  }, [currentStep]);
-
-  const calcularImpostosPreview = async () => {
-    try {
-      setCalculandoImpostos(true);
-      
-      const valorTotal = Object.values(formData.valores)
-        .map((valor: any) => typeof valor === 'number' ? valor : parseFloat(String(valor || 0)))
-        .filter((valor: number) => !isNaN(valor) && valor > 0)
-        .reduce((sum: number, valor: number) => sum + valor, 0);
-
-      if (valorTotal <= 0) {
-        setCalculoImpostos(null);
-        return;
-      }
-
-      const empresa = empresaCompleta || empresas.find(e => e.id === parseInt(formData.empresa_id));
-      
-      const response = await notasService.calcularImpostos({
-        valor_servico: valorTotal,
-        municipio_prestacao: empresa?.cidade || '',
-        codigo_servico: formData.codigo_servico_municipal || empresa?.codigo_servico_municipal || '',
-        codigo_operacao: formData.codigo_operacao || '',
-        finalidade_aquisicao: formData.finalidade_aquisicao || '',
-        perfil_fiscal_emissor: formData.perfil_fiscal_emissor || '',
-        perfil_fiscal_destinatario: formData.perfil_fiscal_destinatario || '',
-        empresa_id: empresa?.id,
-        nfeio_empresa_id: empresa?.nfeio_empresa_id,
-        tomador_id: formData.tomador_id || null
-      });
-
-      if (response.success) {
-        setCalculoImpostos(response.data);
-      } else {
-        setCalculoImpostos(null);
-      }
-    } catch (error) {
-      console.error('Erro ao calcular impostos:', error);
-      setCalculoImpostos(null);
-    } finally {
-      setCalculandoImpostos(false);
-    }
-  };
 
   // Handlers
   const handleEmpresaChange = async (empresaId: string) => {
@@ -1722,13 +1697,42 @@ export function NFSeWizard({ isOpen, onClose }: NFSeWizardProps) {
                   <CardContent className="space-y-3">
                     <div>
                       <Label htmlFor="codigo_servico_municipal">Código de Serviço Municipal *</Label>
-                      <Input
-                        id="codigo_servico_municipal"
-                        value={formData.codigo_servico_municipal}
-                        onChange={(e) => setFormData(prev => ({ ...prev, codigo_servico_municipal: e.target.value }))}
-                        placeholder="Ex: 01.01"
-                        className="mt-2"
-                      />
+                      <div className="flex gap-2 mt-2">
+                        {codigosFrequentes.codigos_servico.length > 0 ? (
+                          <Select
+                            value={codigosFrequentes.codigos_servico.includes(formData.codigo_servico_municipal) ? formData.codigo_servico_municipal : 'custom'}
+                            onValueChange={(value) => {
+                              if (value === 'custom') {
+                                setFormData(prev => ({ ...prev, codigo_servico_municipal: '' }));
+                              } else {
+                                setFormData(prev => ({ ...prev, codigo_servico_municipal: value }));
+                              }
+                            }}
+                          >
+                            <SelectTrigger className="w-[200px]">
+                              <SelectValue placeholder="Selecione ou digite" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="custom">Digitar manualmente</SelectItem>
+                              {codigosFrequentes.codigos_servico.map((codigo) => (
+                                <SelectItem key={codigo} value={codigo}>
+                                  {codigo}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        ) : null}
+                        <Input
+                          id="codigo_servico_municipal"
+                          value={formData.codigo_servico_municipal}
+                          onChange={(e) => setFormData(prev => ({ ...prev, codigo_servico_municipal: e.target.value }))}
+                          placeholder="Ex: 01.01"
+                          className={codigosFrequentes.codigos_servico.length > 0 ? "flex-1" : "w-full"}
+                        />
+                      </div>
+                      {loadingCodigos && (
+                        <p className="text-xs text-muted-foreground mt-1">Carregando códigos frequentes...</p>
+                      )}
                     </div>
                     <div>
                       <Label htmlFor="codigo_servico_federal">Código Federal do Serviço</Label>
@@ -1743,14 +1747,40 @@ export function NFSeWizard({ isOpen, onClose }: NFSeWizardProps) {
                     <div className="grid grid-cols-2 gap-3">
                       <div>
                         <Label htmlFor="cnae_code">Código CNAE *</Label>
-                        <Input
-                          id="cnae_code"
-                          value={formData.cnae_code}
-                          onChange={(e) => setFormData(prev => ({ ...prev, cnae_code: e.target.value }))}
-                          placeholder="Digite o CNAE"
-                          className="mt-2"
-                          required
-                        />
+                        <div className="flex gap-2 mt-2">
+                          {codigosFrequentes.cnaes.length > 0 ? (
+                            <Select
+                              value={codigosFrequentes.cnaes.includes(formData.cnae_code) ? formData.cnae_code : 'custom'}
+                              onValueChange={(value) => {
+                                if (value === 'custom') {
+                                  setFormData(prev => ({ ...prev, cnae_code: '' }));
+                                } else {
+                                  setFormData(prev => ({ ...prev, cnae_code: value }));
+                                }
+                              }}
+                            >
+                              <SelectTrigger className="w-[180px]">
+                                <SelectValue placeholder="Selecione ou digite" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="custom">Digitar manualmente</SelectItem>
+                                {codigosFrequentes.cnaes.map((cnae) => (
+                                  <SelectItem key={cnae} value={cnae}>
+                                    {cnae}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          ) : null}
+                          <Input
+                            id="cnae_code"
+                            value={formData.cnae_code}
+                            onChange={(e) => setFormData(prev => ({ ...prev, cnae_code: e.target.value }))}
+                            placeholder="Ex: 6201-5/00"
+                            className={codigosFrequentes.cnaes.length > 0 ? "flex-1" : "w-full"}
+                            required
+                          />
+                        </div>
                       </div>
                       <div>
                         <Label htmlFor="nbs_code">Código NBS</Label>
@@ -2289,8 +2319,6 @@ export function NFSeWizard({ isOpen, onClose }: NFSeWizardProps) {
             discriminacao={formData.discriminacao}
             valores={formData.valores}
             mesCompetencia={formData.mes_competencia}
-            calculoImpostos={calculoImpostos}
-            calculandoImpostos={calculandoImpostos}
           />
         )}
 

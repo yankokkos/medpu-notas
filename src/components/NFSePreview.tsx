@@ -10,8 +10,6 @@ interface NFSePreviewProps {
   discriminacao: string;
   valores: Record<number, number>;
   mesCompetencia: string;
-  calculoImpostos?: any;
-  calculandoImpostos?: boolean;
 }
 
 export function NFSePreview({
@@ -21,9 +19,7 @@ export function NFSePreview({
   modelo,
   discriminacao = '',
   valores = {},
-  mesCompetencia = '',
-  calculoImpostos = null,
-  calculandoImpostos = false
+  mesCompetencia = ''
 }: NFSePreviewProps) {
   // Validar se há dados mínimos
   if (!empresa || !tomador) {
@@ -44,11 +40,11 @@ export function NFSePreview({
   // Calcular valor total
   const valorTotal = Object.values(valores || {}).reduce((sum: number, valor: number) => sum + (valor || 0), 0);
   
-  // Usar cálculo de impostos da API se disponível, senão usar valores padrão
-  const aliquotaISS = calculoImpostos?.aliquota_iss || 5.0;
-  const valorISS = calculoImpostos?.valor_iss || (valorTotal * (aliquotaISS / 100));
-  const valorLiquido = calculoImpostos?.valor_liquido || (valorTotal - valorISS);
-  const baseCalculo = calculoImpostos?.base_calculo || valorTotal;
+  // Calcular impostos usando alíquota padrão da empresa ou valor padrão
+  const aliquotaISS = empresa?.aliquota_iss ? parseFloat(empresa.aliquota_iss) : 2.01;
+  const valorISS = valorTotal * (aliquotaISS / 100);
+  const valorLiquido = valorTotal - valorISS;
+  const baseCalculo = valorTotal;
 
   // Formatar data
   const formatarData = (data: string) => {
@@ -222,43 +218,29 @@ export function NFSePreview({
           {/* Detalhes Fiscais */}
           <div>
             <h3 className="font-semibold text-lg mb-3">DETALHES FISCAIS</h3>
-            {calculandoImpostos ? (
-              <div className="flex items-center justify-center py-4">
-                <p className="text-sm text-muted-foreground">Calculando impostos...</p>
+            <div className="grid grid-cols-2 gap-4 text-sm">
+              <div>
+                <p className="text-muted-foreground">Base de Cálculo:</p>
+                <p className="font-medium">{formatarMoeda(baseCalculo)}</p>
               </div>
-            ) : (
-              <div className="grid grid-cols-2 gap-4 text-sm">
-                <div>
-                  <p className="text-muted-foreground">Base de Cálculo:</p>
-                  <p className="font-medium">{formatarMoeda(baseCalculo)}</p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground">Alíquota ISS:</p>
-                  <p className="font-medium">
-                    {aliquotaISS > 0 ? `${aliquotaISS.toFixed(2)}%` : 'A calcular'}
-                    {calculoImpostos && !calculoImpostos.estimado && (
-                      <span className="ml-2 text-xs text-green-600">✓ Calculado</span>
-                    )}
-                    {calculoImpostos?.estimado && (
-                      <span className="ml-2 text-xs text-yellow-600">⚠ Estimado</span>
-                    )}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground">Valor do ISS:</p>
-                  <p className="font-medium">{formatarMoeda(valorISS)}</p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground">Valor Líquido:</p>
-                  <p className="font-medium">{formatarMoeda(valorLiquido)}</p>
-                </div>
+              <div>
+                <p className="text-muted-foreground">Alíquota ISS:</p>
+                <p className="font-medium">
+                  {aliquotaISS > 0 ? `${aliquotaISS.toFixed(2)}%` : 'A calcular'}
+                </p>
               </div>
-            )}
-            {calculoImpostos?.message && (
-              <div className="mt-2 text-xs text-muted-foreground">
-                {calculoImpostos.message}
+              <div>
+                <p className="text-muted-foreground">Valor do ISS:</p>
+                <p className="font-medium">{formatarMoeda(valorISS)}</p>
               </div>
-            )}
+              <div>
+                <p className="text-muted-foreground">Valor Líquido:</p>
+                <p className="font-medium">{formatarMoeda(valorLiquido)}</p>
+              </div>
+            </div>
+            <div className="mt-2 text-xs text-muted-foreground">
+              * Cálculo baseado na alíquota padrão da empresa
+            </div>
           </div>
 
           {/* Informações Adicionais */}

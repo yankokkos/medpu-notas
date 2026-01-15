@@ -1490,9 +1490,89 @@ const uploadCertificadoDigital = async (req, res) => {
   }
 };
 
+// Buscar códigos de serviço e CNAEs frequentemente usados por uma empresa
+const buscarCodigosFrequentes = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!id) {
+      return res.status(400).json({
+        success: false,
+        message: 'ID da empresa é obrigatório'
+      });
+    }
+
+    // Buscar códigos de serviço e CNAEs das notas fiscais emitidas por esta empresa
+    // Agrupar por código e contar quantas vezes foi usado
+    const codigosServico = await query(`
+      SELECT 
+        codigo_servico_municipal as codigo,
+        COUNT(*) as vezes_usado,
+        MAX(data_emissao) as ultima_uso
+      FROM notas_fiscais
+      WHERE empresa_id = ? 
+        AND codigo_servico_municipal IS NOT NULL 
+        AND codigo_servico_municipal != ''
+        AND status IN ('AUTORIZADA', 'PROCESSANDO')
+      GROUP BY codigo_servico_municipal
+      ORDER BY vezes_usado DESC, ultima_uso DESC
+      LIMIT 20
+    `, [id]);
+
+    const cnaes = await query(`
+      SELECT 
+        cnae_code as codigo,
+        COUNT(*) as vezes_usado,
+        MAX(data_emissao) as ultima_uso
+      FROM notas_fiscais
+      WHERE empresa_id = ? 
+        AND cnae_code IS NOT NULL 
+        AND cnae_code != ''
+        AND status IN ('AUTORIZADA', 'PROCESSANDO')
+      GROUP BY cnae_code
+      ORDER BY vezes_usado DESC, ultima_uso DESC
+      LIMIT 20
+    `, [id]);
+
+    // Buscar também códigos padrão da empresa
+    const [empresa] = await query('SELECT codigo_servico_municipal, cnae_code FROM empresas WHERE id = ?', [id]);
+    
+    const codigosServicoList = codigosServico.map(c => c.codigo);
+    const cnaesList = cnaes.map(c => c.codigo);
+
+    // Adicionar códigos padrão da empresa se não estiverem na lista
+    if (empresa?.codigo_servico_municipal && !codigosServicoList.includes(empresa.codigo_servico_municipal)) {
+      codigosServicoList.unshift(empresa.codigo_servico_municipal);
+    }
+    if (empresa?.cnae_code && !cnaesList.includes(empresa.cnae_code)) {
+      cnaesList.unshift(empresa.cnae_code);
+    }
+
+    res.json({
+      success: true,
+      data: {
+        codigos_servico: codigosServicoList,
+        cnaes: cnaesList,
+        detalhes: {
+          codigos_servico: codigosServico,
+          cnaes: cnaes
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('Erro ao buscar códigos frequentes:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erro interno do servidor'
+    });
+  }
+};
+
 module.exports = {
   listarEmpresas,
   obterEmpresa,
+  buscarCodigosFrequentes,
   criarEmpresa,
   atualizarEmpresa,
   deletarEmpresa,

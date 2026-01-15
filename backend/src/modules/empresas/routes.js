@@ -13,7 +13,8 @@ const {
   importarEmpresaNFeio,
   atualizarEmpresaNFeio,
   listarEmpresasNFeio,
-  uploadCertificadoDigital
+  uploadCertificadoDigital,
+  buscarCodigosFrequentes
 } = require('./controller');
 const { authenticateToken, authorize } = require('../../middleware/auth');
 const { validateCreate } = require('../../middleware/validation');
@@ -125,6 +126,12 @@ router.post('/:id/pessoas',
 router.get('/:id/socios', 
   authorize(['empresas:read', '*']), 
   obterSocios
+);
+
+// Buscar códigos de serviço e CNAEs frequentemente usados
+router.get('/:id/codigos-frequentes', 
+  authorize(['empresas:read', '*']), 
+  buscarCodigosFrequentes
 );
 
 module.exports = router;

@@ -183,6 +183,11 @@ export const empresasService = {
     return response.data;
   },
 
+  async buscarCodigosFrequentes(empresaId) {
+    const response = await api.get(`/empresas/${empresaId}/codigos-frequentes`);
+    return response.data;
+  },
+
   async uploadCertificadoDigital(empresaId, file, senha, validade) {
     const formData = new FormData();
     formData.append('certificado', file);

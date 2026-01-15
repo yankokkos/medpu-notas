@@ -1887,6 +1887,29 @@ const validarLote = async (req, res) => {
         } else if (tomador.status !== 'ativo') {
           linhaErros.push(`Linha ${i + 1}: Tomador ID ${tomadorId} não está ativo`);
         }
+      } else if (linha.tomador_nao_cadastrado) {
+        // Validar dados do tomador não cadastrado
+        const tomadorData = linha.tomador_nao_cadastrado;
+        if (!tomadorData.nome_razao_social) {
+          linhaErros.push(`Linha ${i + 1}: Nome/Razão Social do tomador é obrigatório`);
+        }
+        if (!tomadorData.cpf_cnpj) {
+          linhaErros.push(`Linha ${i + 1}: CPF/CNPJ do tomador é obrigatório`);
+        } else {
+          const docLimpo = tomadorData.cpf_cnpj.replace(/[^\d]/g, '');
+          const tipoTomador = tomadorData.tipo_tomador || (docLimpo.length === 11 ? 'PESSOA' : 'EMPRESA');
+          if (tipoTomador === 'PESSOA' && docLimpo.length !== 11) {
+            linhaErros.push(`Linha ${i + 1}: CPF deve ter 11 dígitos`);
+          } else if (tipoTomador === 'EMPRESA' && docLimpo.length !== 14) {
+            linhaErros.push(`Linha ${i + 1}: CNPJ deve ter 14 dígitos`);
+          }
+          // Para empresa, validar endereço completo
+          if (tipoTomador === 'EMPRESA') {
+            if (!tomadorData.logradouro || !tomadorData.numero || !tomadorData.bairro || !tomadorData.cidade || !tomadorData.uf || !tomadorData.cep) {
+              linhaErros.push(`Linha ${i + 1}: Para pessoa jurídica, endereço completo é obrigatório (logradouro, número, bairro, cidade, UF e CEP)`);
+            }
+          }
+        }
       } else if (linha.tomador_cpf_cnpj) {
         // Buscar por CPF/CNPJ (precisa verificar em pessoas ou empresas)
         const [tomador] = await query(`
@@ -1952,6 +1975,16 @@ const validarLote = async (req, res) => {
         if (!regex.test(linha.mes_competencia)) {
           linhaErros.push(`Linha ${i + 1}: Mês competência inválido (formato esperado: YYYY-MM)`);
         }
+      }
+
+      // Validar CNAE (obrigatório para emissão)
+      if (!linha.cnae_code || !linha.cnae_code.trim()) {
+        linhaErros.push(`Linha ${i + 1}: CNAE é obrigatório para emissão de nota fiscal`);
+      }
+
+      // Validar código de serviço municipal (já validado acima, mas garantir)
+      if (!linha.codigo_servico_municipal || !linha.codigo_servico_municipal.trim()) {
+        linhaErros.push(`Linha ${i + 1}: Código de serviço municipal é obrigatório`);
       }
 
       // Validar modelo (se informado)
@@ -2023,17 +2056,153 @@ const criarRascunhosLote = async (req, res) => {
         const linha = dados[i];
         
         try {
-          // Resolver empresa_id se foi informado CNPJ
-          let empresaId = linha.empresa_id;
-          if (!empresaId && linha.empresa_cnpj) {
-            const empresas = await queryTx('SELECT id FROM empresas WHERE cnpj = ?', [linha.empresa_cnpj]);
-            if (empresas.length > 0) empresaId = empresas[0].id;
+          // Resolver empresa_id - usar CNPJ como chave principal (não ID)
+          let empresaId = null;
+          if (linha.empresa_cnpj) {
+            // Buscar por CNPJ (chave principal)
+            const cnpjLimpo = linha.empresa_cnpj.replace(/[^\d]/g, '');
+            const empresas = await queryTx('SELECT id FROM empresas WHERE cnpj = ?', [cnpjLimpo]);
+            if (empresas.length > 0) {
+              empresaId = empresas[0].id;
+            } else {
+              throw new Error(`Empresa com CNPJ ${linha.empresa_cnpj} não encontrada`);
+            }
+          } else if (linha.empresa_id) {
+            // Fallback para compatibilidade com planilhas antigas
+            empresaId = parseInt(linha.empresa_id);
+          } else {
+            throw new Error('Empresa não informada. Informe empresa_cnpj');
           }
-          empresaId = parseInt(empresaId);
+          
+          if (!empresaId || isNaN(empresaId)) {
+            throw new Error('Empresa inválida');
+          }
 
-          // Resolver tomador_id se foi informado CPF/CNPJ
-          let tomadorId = linha.tomador_id;
-          if (!tomadorId && linha.tomador_cpf_cnpj) {
+          // Resolver ou criar tomador - usar CPF/CNPJ como chave principal (não ID)
+          let tomadorId = null;
+          
+          // Primeiro, tentar buscar por CPF/CNPJ se fornecido
+          if (linha.tomador_cpf_cnpj) {
+            const docLimpo = linha.tomador_cpf_cnpj.replace(/[^\d]/g, '');
+            const tipoTomador = docLimpo.length === 11 ? 'PESSOA' : 'EMPRESA';
+            
+            // Buscar tomador existente por CPF/CNPJ
+            if (tipoTomador === 'PESSOA') {
+              const [pessoa] = await queryTx('SELECT id FROM pessoas WHERE cpf = ?', [docLimpo]);
+              if (pessoa) {
+                const [tom] = await queryTx('SELECT id FROM tomadores WHERE tipo_tomador = ? AND pessoa_id = ?', ['PESSOA', pessoa.id]);
+                if (tom) tomadorId = tom.id;
+              }
+            } else {
+              const [empresa] = await queryTx('SELECT id FROM empresas WHERE cnpj = ?', [docLimpo]);
+              if (empresa) {
+                const [tom] = await queryTx('SELECT id FROM tomadores WHERE tipo_tomador = ? AND empresa_id = ?', ['EMPRESA', empresa.id]);
+                if (tom) tomadorId = tom.id;
+              }
+            }
+          } else if (linha.tomador_id) {
+            // Fallback para compatibilidade com planilhas antigas
+            tomadorId = parseInt(linha.tomador_id);
+          }
+          
+          // Se não tem tomador_id mas tem dados de tomador não cadastrado
+          if (!tomadorId && linha.tomador_nao_cadastrado) {
+            const tomadorData = linha.tomador_nao_cadastrado;
+            const docLimpo = tomadorData.cpf_cnpj.replace(/[^\d]/g, '');
+            const tipoTomador = tomadorData.tipo_tomador || (docLimpo.length === 11 ? 'PESSOA' : 'EMPRESA');
+            
+            // Verificar se já existe tomador com este CPF/CNPJ
+            let tomadorExistente = null;
+            if (tipoTomador === 'PESSOA') {
+              const [pessoa] = await queryTx('SELECT id FROM pessoas WHERE cpf = ?', [docLimpo]);
+              if (pessoa) {
+                const [tom] = await queryTx('SELECT id FROM tomadores WHERE tipo_tomador = ? AND pessoa_id = ?', ['PESSOA', pessoa.id]);
+                if (tom) tomadorExistente = tom;
+              }
+            } else {
+              const [empresa] = await queryTx('SELECT id FROM empresas WHERE cnpj = ?', [docLimpo]);
+              if (empresa) {
+                const [tom] = await queryTx('SELECT id FROM tomadores WHERE tipo_tomador = ? AND empresa_id = ?', ['EMPRESA', empresa.id]);
+                if (tom) tomadorExistente = tom;
+              }
+            }
+            
+            if (tomadorExistente) {
+              tomadorId = tomadorExistente.id;
+            } else {
+              // Criar pessoa ou empresa primeiro
+              let pessoaId = null;
+              let empresaId = null;
+              
+              if (tipoTomador === 'PESSOA') {
+                // Verificar se pessoa já existe
+                const [pessoaExistente] = await queryTx('SELECT id FROM pessoas WHERE cpf = ?', [docLimpo]);
+                if (pessoaExistente) {
+                  pessoaId = pessoaExistente.id;
+                } else {
+                  // Criar nova pessoa
+                  const pessoaResult = await queryTx(`
+                    INSERT INTO pessoas (nome_completo, cpf, email, telefone, status)
+                    VALUES (?, ?, ?, ?, 'ativo')
+                  `, [tomadorData.nome_razao_social, docLimpo, '', '']);
+                  pessoaId = pessoaResult.insertId;
+                }
+              } else {
+                // Verificar se empresa já existe
+                const [empresaExistente] = await queryTx('SELECT id FROM empresas WHERE cnpj = ?', [docLimpo]);
+                if (empresaExistente) {
+                  empresaId = empresaExistente.id;
+                } else {
+                  // Criar nova empresa
+                  const empresaResult = await queryTx(`
+                    INSERT INTO empresas (
+                      cnpj, razao_social, email, telefone,
+                      endereco, cidade, uf, cep, status
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ativa')
+                  `, [
+                    docLimpo,
+                    tomadorData.nome_razao_social,
+                    '',
+                    '',
+                    tomadorData.logradouro || '',
+                    tomadorData.cidade || '',
+                    tomadorData.uf || '',
+                    tomadorData.cep || '',
+                  ]);
+                  empresaId = empresaResult.insertId;
+                }
+              }
+              
+              // Criar tomador
+              const tomadorResult = await queryTx(`
+                INSERT INTO tomadores (
+                  tipo_tomador, pessoa_id, empresa_id, conta_id, status
+                ) VALUES (?, ?, ?, NULL, 'ativo')
+              `, [tipoTomador, pessoaId, empresaId]);
+              
+              tomadorId = tomadorResult.insertId;
+              
+              // Criar endereço do tomador se fornecido
+              if (tomadorData.logradouro || tomadorData.cep) {
+                await queryTx(`
+                  INSERT INTO enderecos_tomador (
+                    tomador_id, tipo_endereco, logradouro, numero, complemento,
+                    bairro, cidade, estado, cep, pais
+                  ) VALUES (?, 'principal', ?, ?, ?, ?, ?, ?, ?, 'BRA')
+                `, [
+                  tomadorId,
+                  tomadorData.logradouro || '',
+                  tomadorData.numero || '',
+                  tomadorData.complemento || '',
+                  tomadorData.bairro || '',
+                  tomadorData.cidade || '',
+                  tomadorData.uf || '',
+                  tomadorData.cep || '',
+                ]);
+              }
+            }
+          } else if (!tomadorId && linha.tomador_cpf_cnpj) {
+            // Fallback: tentar buscar por CPF/CNPJ (compatibilidade com versão antiga)
             const tomadores = await queryTx(`
               SELECT t.id 
               FROM tomadores t
@@ -2043,11 +2212,55 @@ const criarRascunhosLote = async (req, res) => {
             `, [linha.tomador_cpf_cnpj, linha.tomador_cpf_cnpj]);
             if (tomadores.length > 0) tomadorId = tomadores[0].id;
           }
-          tomadorId = parseInt(tomadorId);
+          
+          if (!tomadorId) {
+            throw new Error('Tomador é obrigatório. Informe um tomador cadastrado ou preencha os dados do tomador não cadastrado.');
+          }
 
+          // Processar sócios - buscar por CPF se fornecido, senão usar pessoa_id
+          const sociosProcessados = [];
+          const sociosInput = linha.socios || [];
+          
+          for (const socio of sociosInput) {
+            let pessoaId = null;
+            
+            // Se tem CPF, buscar pessoa por CPF
+            if (socio.cpf) {
+              const cpfLimpo = socio.cpf.replace(/[^\d]/g, '');
+              const [pessoa] = await queryTx('SELECT id FROM pessoas WHERE cpf = ?', [cpfLimpo]);
+              if (pessoa) {
+                pessoaId = pessoa.id;
+              } else {
+                throw new Error(`Sócio com CPF ${socio.cpf} não encontrado`);
+              }
+            } else if (socio.pessoa_id) {
+              // Fallback para compatibilidade com formato antigo
+              pessoaId = parseInt(socio.pessoa_id);
+            } else {
+              throw new Error('Sócio deve ter CPF ou pessoa_id');
+            }
+            
+            // Verificar se sócio está vinculado à empresa
+            const [vinculo] = await queryTx(`
+              SELECT pessoa_id, empresa_id, ativo
+              FROM pessoa_empresa
+              WHERE pessoa_id = ? AND empresa_id = ?
+            `, [pessoaId, empresaId]);
+            
+            if (!vinculo) {
+              throw new Error(`Sócio com CPF ${socio.cpf || 'ID ' + pessoaId} não está vinculado à empresa`);
+            } else if (!vinculo.ativo) {
+              throw new Error(`Sócio com CPF ${socio.cpf || 'ID ' + pessoaId} não está ativo na empresa`);
+            }
+            
+            sociosProcessados.push({
+              pessoa_id: pessoaId,
+              valor_prestado: parseFloat(socio.valor_prestado) || 0
+            });
+          }
+          
           // Calcular valor total
-          const socios = linha.socios || [];
-          const valorTotal = socios.reduce((sum, s) => sum + (parseFloat(s.valor_prestado) || 0), 0);
+          const valorTotal = sociosProcessados.reduce((sum, s) => sum + (parseFloat(s.valor_prestado) || 0), 0);
 
           if (valorTotal <= 0) {
             throw new Error('Valor total deve ser maior que zero');
@@ -2061,8 +2274,8 @@ const criarRascunhosLote = async (req, res) => {
             INSERT INTO notas_fiscais (
               id, empresa_id, tomador_id, modelo_discriminacao_id,
               status, valor_total, mes_competencia, funcionario_criador_id,
-              discriminacao_final, codigo_servico_municipal
-            ) VALUES (?, ?, ?, ?, 'RASCUNHO', ?, ?, ?, ?, ?)
+              discriminacao_final, codigo_servico_municipal, cnae_code
+            ) VALUES (?, ?, ?, ?, 'RASCUNHO', ?, ?, ?, ?, ?, ?)
           `, [
             notaId,
             empresaId,
@@ -2072,11 +2285,12 @@ const criarRascunhosLote = async (req, res) => {
             linha.mes_competencia,
             funcionarioId,
             linha.discriminacao_final || null,
-            linha.codigo_servico_municipal || null
+            linha.codigo_servico_municipal || null,
+            linha.cnae_code || null
           ]);
 
           // Adicionar sócios
-          for (const socio of socios) {
+          for (const socio of sociosProcessados) {
             const valorPrestado = parseFloat(socio.valor_prestado) || 0;
             const percentual = valorTotal > 0 ? (valorPrestado / valorTotal * 100) : 0;
             

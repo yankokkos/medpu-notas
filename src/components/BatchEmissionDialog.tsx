@@ -8,7 +8,7 @@ import { Progress } from './ui/progress';
 import { Badge } from './ui/badge';
 import { Checkbox } from './ui/checkbox';
 import { BatchEmissionTable } from './BatchEmissionTable';
-import { notasService } from '../services/api';
+import { notasService, empresasService, tomadoresService } from '../services/api';
 import { toast } from 'sonner';
 import { Upload, Download, FileSpreadsheet, CheckCircle, XCircle, Loader2, AlertTriangle, Eye, ExternalLink, FileCheck } from 'lucide-react';
 // @ts-ignore
@@ -24,6 +24,17 @@ interface BatchRow {
   id: string;
   empresa_id: string;
   tomador_id: string;
+  // Campos para tomador não cadastrado
+  tomador_nome?: string;
+  tomador_cpf_cnpj?: string;
+  tomador_tipo?: 'PESSOA' | 'EMPRESA';
+  tomador_cep?: string;
+  tomador_logradouro?: string;
+  tomador_numero?: string;
+  tomador_complemento?: string;
+  tomador_bairro?: string;
+  tomador_cidade?: string;
+  tomador_uf?: string;
   socios_ids: number[];
   valores: Record<number, number>;
   mes_competencia: string;
@@ -306,47 +317,123 @@ export function BatchEmissionDialog({ isOpen, onClose, onSuccess }: BatchEmissio
       }
 
       // Converter dados do XLSX para formato de linhas
+      // Primeiro, buscar empresas e tomadores para resolver CNPJs/CPFs
+      const empresasList = await empresasService.getAll({ status: 'ativa', pode_emitir: 'true' });
+      const tomadoresList = await tomadoresService.getAll({ status: 'ativo' });
+      
+      const empresasMap = new Map();
+      empresasList.data?.empresas?.forEach((emp: any) => {
+        if (emp.cnpj) {
+          empresasMap.set(emp.cnpj.replace(/[^\d]/g, ''), emp.id);
+        }
+      });
+      
+      const tomadoresMap = new Map();
+      tomadoresList.data?.tomadores?.forEach((tom: any) => {
+        const doc = tom.cnpj_cpf?.replace(/[^\d]/g, '') || '';
+        if (doc) {
+          tomadoresMap.set(doc, tom.id);
+        }
+      });
+
       const newRows: BatchRow[] = jsonData.map((row: any, index) => {
-        // Suportar tanto empresa_id quanto empresa_cnpj
+        // Empresa - resolver CNPJ para ID se possível
         let empresa_id = '';
-        if (row.empresa_id) {
+        if (row.empresa_cnpj) {
+          const cnpjLimpo = row.empresa_cnpj.replace(/[^\d]/g, '');
+          const empresaIdEncontrado = empresasMap.get(cnpjLimpo);
+          if (empresaIdEncontrado) {
+            empresa_id = String(empresaIdEncontrado);
+          } else {
+            // Se não encontrou, manter CNPJ para exibição (será resolvido no backend)
+            empresa_id = cnpjLimpo;
+          }
+        } else if (row.empresa_id) {
+          // Fallback para compatibilidade com planilhas antigas
           empresa_id = String(row.empresa_id);
-        } else if (row.empresa_cnpj) {
-          // Buscar empresa por CNPJ (será feito na validação)
-          empresa_id = row.empresa_cnpj;
         }
 
-        // Suportar tanto tomador_id quanto tomador_cpf_cnpj
+        // Tomador - resolver CPF/CNPJ para ID se possível, senão usar dados não cadastrados
         let tomador_id = '';
-        if (row.tomador_id) {
+        const tomadorData: any = {};
+        
+        if (row.tomador_cpf_cnpj) {
+          const docLimpo = row.tomador_cpf_cnpj.replace(/[^\d]/g, '');
+          const tomadorIdEncontrado = tomadoresMap.get(docLimpo);
+          if (tomadorIdEncontrado) {
+            // Tomador cadastrado encontrado
+            tomador_id = String(tomadorIdEncontrado);
+            // Mesmo sendo cadastrado, incluir CEP se fornecido para permitir edição/verificação
+            if (row.tomador_cep) {
+              tomadorData.tomador_cep = row.tomador_cep;
+            }
+          } else if (row.tomador_nome || row.tomador_cep || row.tomador_logradouro) {
+            // Tomador não cadastrado - usar dados completos (pode ter apenas CEP ou endereço)
+            tomadorData.tomador_nome = row.tomador_nome || '';
+            tomadorData.tomador_cpf_cnpj = docLimpo;
+            tomadorData.tomador_cep = row.tomador_cep || '';
+            tomadorData.tomador_logradouro = row.tomador_logradouro || '';
+            tomadorData.tomador_numero = row.tomador_numero || '';
+            tomadorData.tomador_complemento = row.tomador_complemento || '';
+            tomadorData.tomador_bairro = row.tomador_bairro || '';
+            tomadorData.tomador_cidade = row.tomador_cidade || '';
+            tomadorData.tomador_uf = row.tomador_uf || '';
+          } else {
+            // CPF/CNPJ fornecido mas não encontrado e sem dados completos
+            // Manter CPF/CNPJ para que possa ser editado depois
+            tomador_id = docLimpo;
+          }
+        } else if (row.tomador_id) {
+          // Fallback para compatibilidade com planilhas antigas
           tomador_id = String(row.tomador_id);
-        } else if (row.tomador_cpf_cnpj) {
-          tomador_id = row.tomador_cpf_cnpj;
+        }
+        
+        // Se tem CEP mas não tem tomador_id nem dados completos, incluir CEP para edição
+        if (row.tomador_cep && !tomador_id && !tomadorData.tomador_nome) {
+          tomadorData.tomador_cep = row.tomador_cep;
         }
 
-        // Processar sócios (pode ser IDs ou CPFs separados por vírgula)
-        const sociosInput = row.socios_ids || row.socios_cpfs || '';
+        // Processar sócios - usar CPFs como chave principal (não IDs)
+        const sociosInput = row.socios_cpfs || row.socios_ids || '';
         const sociosArray = sociosInput ? String(sociosInput).split(',').map(s => s.trim()) : [];
-        const socios_ids = sociosArray.map(id => parseInt(id)).filter(id => !isNaN(id));
+        // Se são CPFs, manter como string; se são IDs (compatibilidade), converter para número
+        const socios_ids = sociosArray.map(s => {
+          const num = parseInt(s);
+          return !isNaN(num) ? num : 0; // IDs numéricos ou 0 para CPFs (será resolvido no backend)
+        }).filter(id => id > 0);
 
         // Processar valores (separados por vírgula, mesma ordem dos sócios)
         const valoresInput = row.valores || '';
         const valoresArray = valoresInput ? String(valoresInput).split(',').map(v => parseFloat(v.trim()) || 0) : [];
         const valores: Record<number, number> = {};
-        socios_ids.forEach((socioId, index) => {
-          valores[socioId] = valoresArray[index] || 0;
+        socios_ids.forEach((socioId, idx) => {
+          valores[socioId] = valoresArray[idx] || 0;
         });
 
         return {
           id: `row-${Date.now()}-${index}`,
           empresa_id,
           tomador_id,
+          // Dados do tomador não cadastrado (se houver)
+          ...(tomadorData.tomador_nome || tomadorData.tomador_cep || tomadorData.tomador_cpf_cnpj ? {
+            tomador_nome: tomadorData.tomador_nome || '',
+            tomador_cpf_cnpj: tomadorData.tomador_cpf_cnpj || '',
+            tomador_cep: tomadorData.tomador_cep || '',
+            tomador_logradouro: tomadorData.tomador_logradouro || '',
+            tomador_numero: tomadorData.tomador_numero || '',
+            tomador_complemento: tomadorData.tomador_complemento || '',
+            tomador_bairro: tomadorData.tomador_bairro || '',
+            tomador_cidade: tomadorData.tomador_cidade || '',
+            tomador_uf: tomadorData.tomador_uf || '',
+            tomador_tipo: tomadorData.tomador_cpf_cnpj?.length === 11 ? 'PESSOA' : (tomadorData.tomador_cpf_cnpj?.length === 14 ? 'EMPRESA' : undefined),
+          } : {}),
           socios_ids,
           valores,
           mes_competencia: row.mes_competencia || new Date().toISOString().slice(0, 7),
           modelo_id: row.modelo_discriminacao_id ? String(row.modelo_discriminacao_id) : undefined,
-          discriminacao: row.discriminacao,
+          discriminacao: row.discriminacao || '',
           codigo_servico_municipal: row.codigo_servico_municipal || row.codigo_servico || '',
+          cnae_code: row.cnae_code || row.cnae || '',
         };
       });
 
@@ -375,16 +462,37 @@ export function BatchEmissionDialog({ isOpen, onClose, onSuccess }: BatchEmissio
       setValidationErrors({});
       
       // Preparar dados para validação
-      const dadosParaValidar = rows.map(row => ({
-        empresa_id: row.empresa_id,
-        tomador_id: row.tomador_id,
-        socios_ids: row.socios_ids,
-        valores: row.valores,
-        mes_competencia: row.mes_competencia,
-        modelo_id: row.modelo_id,
-        discriminacao: row.discriminacao,
-        codigo_servico_municipal: row.codigo_servico_municipal,
-      }));
+      const dadosParaValidar = rows.map(row => {
+        const dados: any = {
+          empresa_id: row.empresa_id,
+          tomador_id: row.tomador_id,
+          socios_ids: row.socios_ids,
+          valores: row.valores,
+          mes_competencia: row.mes_competencia,
+          modelo_id: row.modelo_id,
+          discriminacao: row.discriminacao,
+          codigo_servico_municipal: row.codigo_servico_municipal,
+          cnae_code: row.cnae_code,
+        };
+
+        // Se não tem tomador_id, incluir dados do tomador não cadastrado
+        if (!row.tomador_id && row.tomador_nome && row.tomador_cpf_cnpj) {
+          dados.tomador_nao_cadastrado = {
+            nome_razao_social: row.tomador_nome,
+            cpf_cnpj: row.tomador_cpf_cnpj.replace(/[^\d]/g, ''),
+            tipo_tomador: row.tomador_tipo || (row.tomador_cpf_cnpj.replace(/[^\d]/g, '').length === 11 ? 'PESSOA' : 'EMPRESA'),
+            cep: row.tomador_cep?.replace(/[^\d]/g, '') || null,
+            logradouro: row.tomador_logradouro || null,
+            numero: row.tomador_numero || null,
+            complemento: row.tomador_complemento || null,
+            bairro: row.tomador_bairro || null,
+            cidade: row.tomador_cidade || null,
+            uf: row.tomador_uf || null,
+          };
+        }
+
+        return dados;
+      });
 
       const response = await notasService.validarLote(dadosParaValidar);
       
@@ -433,20 +541,43 @@ export function BatchEmissionDialog({ isOpen, onClose, onSuccess }: BatchEmissio
       
       // Preparar dados
       const dadosParaCriar = rows.map(row => {
+        // Processar sócios - se temos CPFs, usar CPFs; senão usar IDs
+        // Nota: No formato atual, socios_ids contém IDs numéricos
+        // Para usar CPFs, precisaríamos de uma estrutura diferente
+        // Por enquanto, manteremos IDs mas o backend já suporta buscar por CPF se fornecido
         const socios = row.socios_ids.map(socioId => ({
-          pessoa_id: socioId,
+          pessoa_id: socioId, // ID numérico
           valor_prestado: parseFloat(String(row.valores[socioId] || 0)),
         }));
 
-        return {
+        const dados: any = {
           empresa_id: parseInt(row.empresa_id),
-          tomador_id: parseInt(row.tomador_id),
+          tomador_id: row.tomador_id ? parseInt(row.tomador_id) : null,
           socios: socios,
           mes_competencia: row.mes_competencia,
           modelo_discriminacao_id: row.modelo_id ? parseInt(row.modelo_id) : null,
           discriminacao_final: row.discriminacao || null,
           codigo_servico_municipal: row.codigo_servico_municipal || null,
+          cnae_code: row.cnae_code || null, // CNAE do prestador para esta nota
         };
+
+        // Se não tem tomador_id, incluir dados do tomador não cadastrado
+        if (!row.tomador_id && row.tomador_nome && row.tomador_cpf_cnpj) {
+          dados.tomador_nao_cadastrado = {
+            nome_razao_social: row.tomador_nome,
+            cpf_cnpj: row.tomador_cpf_cnpj.replace(/[^\d]/g, ''),
+            tipo_tomador: row.tomador_tipo || (row.tomador_cpf_cnpj.replace(/[^\d]/g, '').length === 11 ? 'PESSOA' : 'EMPRESA'),
+            cep: row.tomador_cep?.replace(/[^\d]/g, '') || null,
+            logradouro: row.tomador_logradouro || null,
+            numero: row.tomador_numero || null,
+            complemento: row.tomador_complemento || null,
+            bairro: row.tomador_bairro || null,
+            cidade: row.tomador_cidade || null,
+            uf: row.tomador_uf || null,
+          };
+        }
+
+        return dados;
       });
 
       const response = await notasService.criarRascunhosLote(dadosParaCriar);
