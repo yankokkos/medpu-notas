@@ -612,6 +612,14 @@ const criarNota = async (req, res) => {
       cep: tomadorCompleto.cep
     });
 
+    // Se já tem endereço em enderecos_tomador e obtivemos código IBGE, sobrescrever para próximas emissões
+    if (codigoMunicipio && enderecoTomador?.id) {
+      await query(
+        `UPDATE enderecos_tomador SET cidade_codigo_ibge = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+        [codigoMunicipio, enderecoTomador.id]
+      );
+    }
+
     // Buscar dados dos sócios
     const sociosCompletos = [];
     if (socios && socios.length > 0) {
@@ -2021,23 +2029,29 @@ const validarLote = async (req, res) => {
 
 // Criar rascunhos em lote
 const criarRascunhosLote = async (req, res) => {
+  const log = (msg, data) => console.log('[criar-lote]', msg, data !== undefined ? JSON.stringify(data, null, 2) : '');
   try {
+    log('POST /api/notas-fiscais/criar-lote - body keys', Object.keys(req.body || {}));
     const { dados } = req.body;
 
     if (!Array.isArray(dados) || dados.length === 0) {
+      log('ERRO: dados inválidos', { temDados: !!dados, isArray: Array.isArray(dados), length: dados?.length });
       return res.status(400).json({
         success: false,
         message: 'Dados inválidos. É necessário um array de notas.'
       });
     }
+    log('Quantidade de itens no lote', dados.length);
 
     const funcionarioId = req.user?.id;
     if (!funcionarioId) {
+      log('ERRO: usuário não autenticado', { user: req.user });
       return res.status(401).json({
         success: false,
         message: 'Usuário não autenticado'
       });
     }
+    log('Funcionário autor', funcionarioId);
 
     const notasCriadas = [];
     const erros = [];
@@ -2054,7 +2068,13 @@ const criarRascunhosLote = async (req, res) => {
 
       for (let i = 0; i < dados.length; i++) {
         const linha = dados[i];
-        
+        log(`Linha ${i + 1}/${dados.length} - processando`, {
+          empresa_cnpj: linha.empresa_cnpj,
+          empresa_id: linha.empresa_id,
+          tomador_cpf_cnpj: linha.tomador_cpf_cnpj,
+          tomador_id: linha.tomador_id,
+          tem_tomador_nao_cadastrado: !!linha.tomador_nao_cadastrado
+        });
         try {
           // Resolver empresa_id - usar CNPJ como chave principal (não ID)
           let empresaId = null;
@@ -2110,6 +2130,92 @@ const criarRascunhosLote = async (req, res) => {
             const tomadorData = linha.tomador_nao_cadastrado;
             const docLimpo = tomadorData.cpf_cnpj.replace(/[^\d]/g, '');
             const tipoTomador = tomadorData.tipo_tomador || (docLimpo.length === 11 ? 'PESSOA' : 'EMPRESA');
+
+            // Helper: cria ou atualiza endereço principal do tomador, sobrescrevendo IBGE quando fornecido
+            const upsertEnderecoTomadorPrincipal = async (tomadorIdAlvo) => {
+              // Resolver código IBGE (aceitar snake_case e camelCase)
+              let codigoIbgeTomador = (tomadorData.codigo_municipio && String(tomadorData.codigo_municipio).trim())
+                || (tomadorData.codigo_ibge && String(tomadorData.codigo_ibge).trim())
+                || (tomadorData.codigoIbge && String(tomadorData.codigoIbge).trim())
+                || null;
+
+              if (log) log('tomador_nao_cadastrado endereço', {
+                codigo_municipio: tomadorData.codigo_municipio,
+                codigo_ibge: tomadorData.codigo_ibge,
+                codigoIbge: tomadorData.codigoIbge,
+                cep: tomadorData.cep,
+                resolvido: !!codigoIbgeTomador
+              });
+
+              // Fallback: se tem CEP mas não veio código IBGE, consultar ViaCEP para obter
+              if (!codigoIbgeTomador && tomadorData.cep && String(tomadorData.cep).replace(/[^\d]/g, '').length === 8) {
+                try {
+                  const resultadoCEP = await nfeioService.consultarEnderecoPorCEP(String(tomadorData.cep).replace(/[^\d]/g, ''));
+                  if (resultadoCEP.success && (resultadoCEP.codigo_municipio || resultadoCEP.codigo_ibge || resultadoCEP.ibge)) {
+                    codigoIbgeTomador = String(resultadoCEP.codigo_municipio || resultadoCEP.codigo_ibge || resultadoCEP.ibge).trim();
+                    if (log) log('código IBGE obtido via CEP (fallback)', { cep: tomadorData.cep, codigo: codigoIbgeTomador });
+                  }
+                } catch (e) {
+                  if (log) log('falha ao buscar IBGE por CEP', e.message);
+                }
+              }
+
+              const temAlgumEndereco =
+                !!(tomadorData.logradouro || tomadorData.cep || tomadorData.bairro || tomadorData.cidade || tomadorData.uf || codigoIbgeTomador);
+
+              if (!temAlgumEndereco) return;
+
+              const [enderecoExistente] = await queryTx(
+                `SELECT id FROM enderecos_tomador WHERE tomador_id = ? AND tipo_endereco = 'principal' LIMIT 1`,
+                [tomadorIdAlvo]
+              );
+
+              if (enderecoExistente?.id) {
+                // Sobrescrever campos fornecidos; IBGE sobrescreve quando vier (COALESCE mantém o atual se null)
+                await queryTx(
+                  `UPDATE enderecos_tomador SET
+                    logradouro = ?,
+                    numero = ?,
+                    complemento = ?,
+                    bairro = ?,
+                    cidade = ?,
+                    cidade_codigo_ibge = COALESCE(?, cidade_codigo_ibge),
+                    estado = ?,
+                    cep = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                  WHERE id = ?`,
+                  [
+                    tomadorData.logradouro || '',
+                    tomadorData.numero || '',
+                    tomadorData.complemento || '',
+                    tomadorData.bairro || '',
+                    tomadorData.cidade || '',
+                    codigoIbgeTomador,
+                    tomadorData.uf || '',
+                    tomadorData.cep || '',
+                    enderecoExistente.id
+                  ]
+                );
+              } else {
+                await queryTx(
+                  `INSERT INTO enderecos_tomador (
+                    tomador_id, tipo_endereco, logradouro, numero, complemento,
+                    bairro, cidade, cidade_codigo_ibge, estado, cep, pais
+                  ) VALUES (?, 'principal', ?, ?, ?, ?, ?, ?, ?, ?, 'BRA')`,
+                  [
+                    tomadorIdAlvo,
+                    tomadorData.logradouro || '',
+                    tomadorData.numero || '',
+                    tomadorData.complemento || '',
+                    tomadorData.bairro || '',
+                    tomadorData.cidade || '',
+                    codigoIbgeTomador || '',
+                    tomadorData.uf || '',
+                    tomadorData.cep || ''
+                  ]
+                );
+              }
+            };
             
             // Verificar se já existe tomador com este CPF/CNPJ
             let tomadorExistente = null;
@@ -2129,6 +2235,8 @@ const criarRascunhosLote = async (req, res) => {
             
             if (tomadorExistente) {
               tomadorId = tomadorExistente.id;
+              // Se já existe, ainda assim atualizar/sobrescrever endereço/IBGE se vierem do front
+              await upsertEnderecoTomadorPrincipal(tomadorId);
             } else {
               // Criar pessoa ou empresa primeiro
               let pessoaId = null;
@@ -2140,11 +2248,12 @@ const criarRascunhosLote = async (req, res) => {
                 if (pessoaExistente) {
                   pessoaId = pessoaExistente.id;
                 } else {
-                  // Criar nova pessoa
+                  // Criar nova pessoa (email NULL se vazio - coluna UNIQUE não aceita múltiplos '')
+                  const emailPessoa = (tomadorData.email && String(tomadorData.email).trim()) ? String(tomadorData.email).trim() : null;
                   const pessoaResult = await queryTx(`
                     INSERT INTO pessoas (nome_completo, cpf, email, telefone, status)
                     VALUES (?, ?, ?, ?, 'ativo')
-                  `, [tomadorData.nome_razao_social, docLimpo, '', '']);
+                  `, [tomadorData.nome_razao_social, docLimpo, emailPessoa, tomadorData.telefone || '']);
                   pessoaId = pessoaResult.insertId;
                 }
               } else {
@@ -2153,7 +2262,8 @@ const criarRascunhosLote = async (req, res) => {
                 if (empresaExistente) {
                   empresaId = empresaExistente.id;
                 } else {
-                  // Criar nova empresa
+                  // Criar nova empresa (email NULL se vazio - evita duplicata em coluna UNIQUE)
+                  const emailEmpresa = (tomadorData.email && String(tomadorData.email).trim()) ? String(tomadorData.email).trim() : null;
                   const empresaResult = await queryTx(`
                     INSERT INTO empresas (
                       cnpj, razao_social, email, telefone,
@@ -2162,8 +2272,8 @@ const criarRascunhosLote = async (req, res) => {
                   `, [
                     docLimpo,
                     tomadorData.nome_razao_social,
-                    '',
-                    '',
+                    emailEmpresa,
+                    tomadorData.telefone || '',
                     tomadorData.logradouro || '',
                     tomadorData.cidade || '',
                     tomadorData.uf || '',
@@ -2181,25 +2291,9 @@ const criarRascunhosLote = async (req, res) => {
               `, [tipoTomador, pessoaId, empresaId]);
               
               tomadorId = tomadorResult.insertId;
-              
-              // Criar endereço do tomador se fornecido
-              if (tomadorData.logradouro || tomadorData.cep) {
-                await queryTx(`
-                  INSERT INTO enderecos_tomador (
-                    tomador_id, tipo_endereco, logradouro, numero, complemento,
-                    bairro, cidade, estado, cep, pais
-                  ) VALUES (?, 'principal', ?, ?, ?, ?, ?, ?, ?, 'BRA')
-                `, [
-                  tomadorId,
-                  tomadorData.logradouro || '',
-                  tomadorData.numero || '',
-                  tomadorData.complemento || '',
-                  tomadorData.bairro || '',
-                  tomadorData.cidade || '',
-                  tomadorData.uf || '',
-                  tomadorData.cep || '',
-                ]);
-              }
+
+              // Criar/atualizar endereço principal e IBGE (sobrescreve se vier do front)
+              await upsertEnderecoTomadorPrincipal(tomadorId);
             }
           } else if (!tomadorId && linha.tomador_cpf_cnpj) {
             // Fallback: tentar buscar por CPF/CNPJ (compatibilidade com versão antiga)
@@ -2302,8 +2396,10 @@ const criarRascunhosLote = async (req, res) => {
           }
 
           notasCriadas.push({ id: notaId, linha: i + 1 });
+          log(`Linha ${i + 1} - nota criada`, { id: notaId });
 
         } catch (error) {
+          log(`Linha ${i + 1} - ERRO`, { message: error.message, stack: error.stack });
           erros.push({
             linha: i + 1,
             mensagem: error.message || 'Erro ao criar nota'
@@ -2342,6 +2438,9 @@ const criarRascunhosLote = async (req, res) => {
       notasCompletas.push(...notasDetalhes);
     }
 
+    log('Resultado final', { total: dados.length, criadas: notasCriadas.length, erros: erros.length });
+    if (erros.length > 0) log('Erros por linha', erros);
+
     res.json({
       success: true,
       data: {
@@ -2353,7 +2452,7 @@ const criarRascunhosLote = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Erro ao criar rascunhos em lote:', error);
+    console.error('[criar-lote] Erro ao criar rascunhos em lote:', error.message, error.stack);
     res.status(500).json({
       success: false,
       message: 'Erro interno do servidor'
@@ -2508,6 +2607,47 @@ const emitirLote = async (req, res) => {
           nome_razao_social: nota.tomador_nome_razao_social,
           cnpj_cpf: nota.tomador_cnpj_cpf
         };
+
+        // Código IBGE do tomador: usar o que já está no endereço ou buscar por CEP/cidade+UF e sobrescrever no banco
+        let codigoMunicipioTomador = enderecoTomador?.cidade_codigo_ibge
+          || enderecoTomador?.codigo_municipio
+          || enderecoTomador?.codigo_ibge
+          || null;
+        const cepTomador = enderecoTomador?.cep || '';
+        const cidadeTomador = enderecoTomador?.cidade || enderecoTomador?.municipio || '';
+        const ufTomador = enderecoTomador?.estado || enderecoTomador?.uf || '';
+
+        if (!codigoMunicipioTomador && cepTomador && String(cepTomador).replace(/[^\d]/g, '').length === 8) {
+          try {
+            const resultadoCEP = await nfeioService.consultarEnderecoPorCEP(String(cepTomador).replace(/[^\d]/g, ''));
+            if (resultadoCEP.success && (resultadoCEP.codigo_municipio || resultadoCEP.codigo_ibge || resultadoCEP.ibge)) {
+              codigoMunicipioTomador = String(resultadoCEP.codigo_municipio || resultadoCEP.codigo_ibge || resultadoCEP.ibge).trim();
+            }
+          } catch (e) {
+            // ignora
+          }
+        }
+        if (!codigoMunicipioTomador && cidadeTomador && ufTomador) {
+          try {
+            const resultadoIBGE = await nfeioService.buscarCodigoIBGEPorCidadeUF(cidadeTomador, ufTomador);
+            if (resultadoIBGE.success && resultadoIBGE.codigo_ibge) {
+              codigoMunicipioTomador = String(resultadoIBGE.codigo_ibge).trim();
+            }
+          } catch (e) {
+            // ignora
+          }
+        }
+
+        if (codigoMunicipioTomador) {
+          tomadorData.codigo_municipio = codigoMunicipioTomador;
+          // Se já tem endereço do tomador, sobrescrever cidade_codigo_ibge para próximas emissões
+          if (enderecoTomadorEspecifico?.id) {
+            await query(
+              `UPDATE enderecos_tomador SET cidade_codigo_ibge = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+              [codigoMunicipioTomador, enderecoTomadorEspecifico.id]
+            );
+          }
+        }
 
         // Preparar dados da nota com código de serviço municipal
         const notaData = {

@@ -28,6 +28,8 @@ interface BatchRow {
   tomador_nome?: string;
   tomador_cpf_cnpj?: string;
   tomador_tipo?: 'PESSOA' | 'EMPRESA';
+  tomador_email?: string;
+  tomador_codigo_municipio?: string;
   tomador_cep?: string;
   tomador_logradouro?: string;
   tomador_numero?: string;
@@ -481,6 +483,8 @@ export function BatchEmissionDialog({ isOpen, onClose, onSuccess }: BatchEmissio
             nome_razao_social: row.tomador_nome,
             cpf_cnpj: row.tomador_cpf_cnpj.replace(/[^\d]/g, ''),
             tipo_tomador: row.tomador_tipo || (row.tomador_cpf_cnpj.replace(/[^\d]/g, '').length === 11 ? 'PESSOA' : 'EMPRESA'),
+            email: row.tomador_email?.trim() || null,
+            codigo_municipio: (row.tomador_codigo_municipio && String(row.tomador_codigo_municipio).trim()) || null,
             cep: row.tomador_cep?.replace(/[^\d]/g, '') || null,
             logradouro: row.tomador_logradouro || null,
             numero: row.tomador_numero || null,
@@ -567,6 +571,8 @@ export function BatchEmissionDialog({ isOpen, onClose, onSuccess }: BatchEmissio
             nome_razao_social: row.tomador_nome,
             cpf_cnpj: row.tomador_cpf_cnpj.replace(/[^\d]/g, ''),
             tipo_tomador: row.tomador_tipo || (row.tomador_cpf_cnpj.replace(/[^\d]/g, '').length === 11 ? 'PESSOA' : 'EMPRESA'),
+            email: row.tomador_email?.trim() || null,
+            codigo_municipio: (row.tomador_codigo_municipio && String(row.tomador_codigo_municipio).trim()) || null,
             cep: row.tomador_cep?.replace(/[^\d]/g, '') || null,
             logradouro: row.tomador_logradouro || null,
             numero: row.tomador_numero || null,

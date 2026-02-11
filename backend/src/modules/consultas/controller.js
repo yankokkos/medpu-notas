@@ -208,7 +208,9 @@ const consultarEnderecoPorCEP = async (req, res) => {
         bairro: resultado.bairro,
         cidade: resultado.cidade,
         uf: resultado.uf,
-        cep: resultado.cep
+        cep: resultado.cep,
+        codigo_municipio: resultado.codigo_municipio || resultado.codigo_ibge || resultado.ibge || null,
+        codigoIbge: resultado.codigo_municipio || resultado.codigo_ibge || resultado.ibge || null
       }
     });
   } catch (error) {

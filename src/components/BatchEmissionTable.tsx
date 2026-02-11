@@ -31,6 +31,8 @@ interface BatchRow {
   tomador_nome?: string;
   tomador_cpf_cnpj?: string;
   tomador_tipo?: 'PESSOA' | 'EMPRESA';
+  tomador_email?: string;
+  tomador_codigo_municipio?: string;
   tomador_cep?: string;
   tomador_logradouro?: string;
   tomador_numero?: string;
@@ -231,13 +233,14 @@ export function BatchEmissionTable({ rows, onRowsChange, validationErrors = {} }
       
       if (response.success && response.data) {
         const dados = response.data;
-        
+        const codigoMunicipio = dados.codigo_municipio || dados.codigoIbge || dados.ibge || '';
         updateRow(rowId, {
           tomador_logradouro: dados.logradouro || '',
           tomador_bairro: dados.bairro || '',
           tomador_cidade: dados.cidade || '',
           tomador_uf: dados.uf || '',
-          tomador_cep: dados.cep || cepLimpo
+          tomador_cep: dados.cep || cepLimpo,
+          tomador_codigo_municipio: (typeof codigoMunicipio === 'string' ? codigoMunicipio : String(codigoMunicipio || '')).trim()
         });
 
         toast.success('Endereço encontrado!', {
@@ -351,9 +354,9 @@ export function BatchEmissionTable({ rows, onRowsChange, validationErrors = {} }
                         value={row.tomador_id || 'none'}
                         onValueChange={(value) => {
                           if (value === 'none') {
-                            updateRow(row.id, { tomador_id: '', tomador_nome: '', tomador_cpf_cnpj: '', tomador_tipo: undefined });
+                            updateRow(row.id, { tomador_id: '', tomador_nome: '', tomador_cpf_cnpj: '', tomador_tipo: undefined, tomador_email: '', tomador_codigo_municipio: '' });
                           } else {
-                            updateRow(row.id, { tomador_id: value, tomador_nome: '', tomador_cpf_cnpj: '', tomador_tipo: undefined });
+                            updateRow(row.id, { tomador_id: value, tomador_nome: '', tomador_cpf_cnpj: '', tomador_tipo: undefined, tomador_email: '', tomador_codigo_municipio: '' });
                           }
                         }}
                       >
@@ -406,6 +409,17 @@ export function BatchEmissionTable({ rows, onRowsChange, validationErrors = {} }
                               disabled={!!row.tomador_id}
                             />
                           </div>
+                        </div>
+                        <div>
+                          <Label className="text-xs">E-mail</Label>
+                          <Input
+                            type="email"
+                            value={row.tomador_email || ''}
+                            onChange={(e) => updateRow(row.id, { tomador_email: e.target.value })}
+                            placeholder="email@exemplo.com"
+                            className="w-full h-7 text-xs"
+                            disabled={!!row.tomador_id}
+                          />
                         </div>
                         <div className="flex gap-2">
                           <div className="flex-1">
@@ -503,6 +517,17 @@ export function BatchEmissionTable({ rows, onRowsChange, validationErrors = {} }
                             value={row.tomador_cidade || ''}
                             onChange={(e) => updateRow(row.id, { tomador_cidade: e.target.value })}
                             placeholder="Cidade"
+                            className="w-full h-7 text-xs"
+                            disabled={!!row.tomador_id}
+                          />
+                        </div>
+                        <div>
+                          <Label className="text-xs">Código IBGE (município)</Label>
+                          <Input
+                            type="text"
+                            value={row.tomador_codigo_municipio || ''}
+                            onChange={(e) => updateRow(row.id, { tomador_codigo_municipio: e.target.value.replace(/\D/g, '').slice(0, 7) })}
+                            placeholder="Ex: 2800308 (preenchido ao buscar CEP)"
                             className="w-full h-7 text-xs"
                             disabled={!!row.tomador_id}
                           />
