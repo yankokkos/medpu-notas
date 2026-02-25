@@ -1068,15 +1068,27 @@ class NFeIOService {
       console.error('❌ Erro ao emitir nota na NFe.io:');
       console.error('   Status:', error.response?.status);
       console.error('   Mensagem:', error.message);
-      console.error('   Dados do erro:', JSON.stringify(error.response?.data, null, 2));
+      const responseData = error.response?.data;
+      const dataStr = responseData === undefined || responseData === null
+        ? '(sem corpo)'
+        : typeof responseData === 'string'
+          ? responseData || '(vazio)'
+          : JSON.stringify(responseData, null, 2) || '(vazio)';
+      console.error('   Dados do erro:', dataStr);
       console.error('   URL:', error.config?.url);
       console.error('   Método:', error.config?.method);
+      if (error.response?.status === 403) {
+        console.error('   💡 403 Forbidden: Verifique se está usando a "Chave de Nota Fiscal" (não a "Chave de Dados") no NFEIO_API_KEY e se a empresa pertence à mesma conta.');
+      }
       
       // Formatar mensagem de erro mais amigável
       let errorMessage = 'Erro ao emitir nota na NFe.io';
       let errorSuggestion = '';
       
-      if (error.response?.data) {
+      if (error.response?.status === 403) {
+        errorMessage = 'Acesso negado pela NFe.io (403). Use a Chave de Nota Fiscal na variável NFEIO_API_KEY e confirme que a empresa pertence à sua conta.';
+        errorSuggestion = 'No painel NFe.io: CONTA → CHAVE DE ACESSO → use a "Chave de Nota fiscal" para emissão. A "Chave de Dados" não emite notas.';
+      } else if (error.response?.data) {
         // Tentar extrair mensagem de erro mais específica
         if (error.response.data.errors && Array.isArray(error.response.data.errors)) {
           const erros = error.response.data.errors.map(e => {
